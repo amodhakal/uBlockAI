@@ -1,5 +1,6 @@
 import re
 from typing import Any, Dict, List
+from langchain_core.tools import tool
 
 from app.schemas.tool_io import NumericVerifyInput, NumericVerifyOutput, NumericFinding
 
@@ -31,11 +32,22 @@ def _to_float(num_str: str) -> float:
     return float(num_str.replace(",", "").replace("$", "").replace("%", "").strip())
 
 
-def numeric_verify(payload: Dict[str, Any]) -> Dict[str, Any]:
+@tool
+def numeric_verify(claim_text: str, expected_result: float = None) -> Dict[str, Any]:
     """
-    Tool entrypoint: accepts dict (from Backboard tool call args),
-    validates via Pydantic, returns JSON-serializable dict output.
+    Verify numeric claims by checking if calculations are correct and identifying suspicious numeric patterns.
+
+    Args:
+        claim_text: The text containing the numeric claim to verify
+        expected_result: Optional expected result to compare against
+
+    Returns:
+        Dict with extracted numbers, flags, computed checks, and suspiciousness score
     """
+    payload = {"claim_text": claim_text}
+    if expected_result is not None:
+        payload["expected_result"] = expected_result
+
     inp = NumericVerifyInput(**payload)
     claim = inp.claim_text
 
@@ -77,14 +89,20 @@ def numeric_verify(payload: Dict[str, Any]) -> Dict[str, Any]:
             computed["ranges"] = ranges
 
     # Heuristic: huge currency amounts mentioned with urgency often correlate with scams
-    if "$" in claim and any(k in lowered for k in ["today", "now", "urgent", "limited time", "within"]):
+    if "$" in claim and any(
+        k in lowered for k in ["today", "now", "urgent", "limited time", "within"]
+    ):
         flags.append("currency_with_urgency_pattern")
 
     # Heuristic numeric suspiciousness score
     # 0.0 clean → 1.0 very suspicious
     score = 0.0
     if flags:
-        score = min(1.0, 0.15 * len(flags) + (0.2 if any("out_of_range" in f for f in flags) else 0.0))
+        score = min(
+            1.0,
+            0.15 * len(flags)
+            + (0.2 if any("out_of_range" in f for f in flags) else 0.0),
+        )
 
     out = NumericVerifyOutput(
         claim_text=claim,

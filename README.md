@@ -27,7 +27,7 @@ uBlockAI acts as an ad-blocker analog for AI misinformation. It analyzes Instagr
 ### Backend (FastAPI + AI Agents)
 - **Location**: `/backend/`
 - **Framework**: FastAPI with CORS support
-- **AI Agents**: Backboard-based multi-agent system
+- **AI Agents**: LangGraph-based multi-agent system
 - **Tools**:
   - Web Search Tool: Searches alternative news sources
   - Credibility Tool: Assesses source reliability
@@ -44,10 +44,10 @@ uBlockAI acts as an ad-blocker analog for AI misinformation. It analyzes Instagr
 ### Backend
 - **Python 3.10+**
 - **FastAPI**: Web framework
-- **Backboard SDK**: AI agent orchestration
+- **LangChain/LangGraph**: AI agent orchestration
 - **Tesseract OCR**: Text extraction from images
 - **BeautifulSoup**: Web scraping
-- **OpenAI GPT / Google Gemini**: LLM models
+- **OpenAI GPT-5**: LLM models
 
 ## Installation
 
@@ -81,7 +81,7 @@ pip install -r requirements.txt
 
 5. Create a `.env` file in `/backend/app/` with your API keys:
 ```
-BACKBOARD_API_KEY=your_backboard_api_key
+OPENAI_API_KEY=your_openai_api_key
 ```
 
 6. Start the server:
@@ -132,7 +132,7 @@ uBlockAI/
 ├── backend/
 │   ├── app/
 │   │   ├── agents/
-│   │   │   ├── backboard_agent.py    # Main AI agent orchestration
+│   │   │   ├── langchain_agent.py   # Main AI agent orchestration
 │   │   │   └── prompts.py            # LLM prompts
 │   │   ├── api/
 │   │   │   └── routes.py             # FastAPI routes
@@ -165,7 +165,7 @@ uBlockAI/
 1. **Content Capture**: The Chrome extension content script monitors Instagram posts
 2. **Image Processing**: Post images are captured and sent to the backend
 3. **OCR Extraction**: Tesseract OCR extracts text from images
-4. **Claim Analysis**: The Backboard AI agent analyzes the caption + OCR text
+4. **Claim Analysis**: The LangGraph AI agent analyzes the caption + OCR text
 5. **Verification**: The agent uses web search tools to verify claims against reliable sources
 6. **Scoring**: An AI score and misinformation score are calculated
 7. **Response**: Results are returned to the frontend

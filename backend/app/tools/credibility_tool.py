@@ -1,72 +1,56 @@
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from urllib.parse import urlparse
-
-from backboard import BackboardClient
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from app.agents.prompts import CREDIBILITY_TOOL_PROMPT
+
+
+llm = ChatOpenAI(model="gpt-5-main", temperature=0)
+
 
 def _domain(u: str) -> str:
     return (urlparse(u).netloc or "").lower().replace("www.", "")
 
-class CredibilityTool:
-    def __init__(self,  client: BackboardClient, model_name: str ="gpt-4o"):
-        print("Initializing CredibilityTool...")
-        self.client = client
-        self.model_name = model_name
-        self.assistant_id: Optional[str] = None
-    
-    async def ensure_assistant(self):
-        if self.assistant_id:
-            return self.assistant_id
-        
-        a = await self.client.create_assistant(
-            name="CredibilityTool",
-            description=CREDIBILITY_TOOL_PROMPT,
-            tools=[]
+
+@tool
+async def credibility_llm(sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    LLM-based credibility tiering for sources using url/title/snippet.
+
+    Args:
+        sources: List of sources with url, title, and snippet
+
+    Returns:
+        Dict with items containing url, domain, tier, rationale, and signals
+    """
+    print("Evaluating source credibility...")
+
+    normalized = []
+    for s in sources:
+        url = s.get("url")
+        if not url:
+            continue
+        normalized.append(
+            {
+                "url": url,
+                "domain": _domain(url),
+                "title": s.get("title"),
+                "snippet": s.get("snippet"),
+            }
         )
 
-        self.assistant_id = a.assistant_id
-        return self.assistant_id
+    messages = [
+        {"role": "system", "content": CREDIBILITY_TOOL_PROMPT},
+        {"role": "user", "content": json.dumps({"sources": normalized})},
+    ]
 
-    async def run(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        assistant_id = await self.ensure_assistant()
-        thread = await self.client.start_thread(
-            assistant_id=assistant_id,
-        )
+    response = await llm.ainvoke(messages)
+    content = response.content
 
-        sources = payload.get("sources", [])
-        normalized = []
-        for s in sources:
-            url = s.get("url")
-            if not url:
-                continue
-            normalized.append(
-                {
-                    "url": url,
-                    "domain": _domain(url),
-                    "title": s.get("title"),
-                    "snippet": s.get("snippet"),
-                }
-            )
-        
-        msg = {
-            "sources": normalized
-        }
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        data = {"items": []}
 
-        resp = await self.client.add_message(
-            thread_id=thread.thread_id,
-            content=json.dumps(msg),
-            stream=False,
-            memory="off",
-            model_name=self.model_name
-        )
-
-        raw = resp.content
-        if isinstance(raw, str):
-            data = json.loads(raw)
-        else:
-            data = raw
-
-        return data
-    
-    
+    return data
