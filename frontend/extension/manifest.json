@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "name": "AIBot",
   "description": "Your new AI Bot",
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

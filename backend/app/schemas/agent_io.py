@@ -46,3 +46,7 @@ class AgentOutput(BaseModel):
         default_factory=list,
         description="What could not be verified or was uncertain."
     )
+    explanation: str = Field(
+        default="",
+        description="Human-readable explanation of why this post was flagged or cleared."
+    )

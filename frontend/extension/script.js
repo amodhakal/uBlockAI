@@ -59,10 +59,46 @@
     }
   });
 
-  function getAllPosts() {
-    const posts = document.querySelectorAll(
+  const INSTAGRAM_SELECTORS = {
+    postContainer: [
       "article:not([data-aibot-processed])",
-    );
+      "div[role='article']:not([data-aibot-processed])",
+      "main article:not([data-aibot-processed])",
+    ],
+    postImage: [
+      "div._aagu._aa20 div._aagv img",
+      "div._a9--._ap30 img",
+      "article img[src*='instagram.com'], article img[src*='fbcdn.net']",
+      'img[alt^="Photo by"], img[alt^="Image by"]',
+      "article img:not([aria-hidden='true']):not([src*='emoji'])",
+    ],
+    caption: [
+      "span._ap3a._aacu",
+      "span._ap3a",
+      "span.x1lliihq",
+      "div[role='article'] span[dir='auto']",
+      "article a[href*='/p/'] + div span",
+    ],
+  };
+
+  function queryWithFallback(selectors, root = document) {
+    for (const selector of selectors) {
+      const el = root.querySelector(selector);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  function queryAllWithFallback(selectors, root = document) {
+    for (const selector of selectors) {
+      const els = root.querySelectorAll(selector);
+      if (els.length > 0) return els;
+    }
+    return root.querySelectorAll(selectors[0]);
+  }
+
+  function getAllPosts() {
+    const posts = queryAllWithFallback(INSTAGRAM_SELECTORS.postContainer);
     // DEBUG: console.log(
     //   `[AIBot Extension] Found ${posts.length} unprocessed article elements`,
     // );
@@ -73,13 +109,7 @@
         return null;
       }
 
-      let img = null;
-
-      img = post.querySelector("div._aagu._aa20 div._aagv img");
-
-      if (!img) {
-        img = post.querySelector('img[alt^="Photo by"]');
-      }
+      let img = queryWithFallback(INSTAGRAM_SELECTORS.postImage, post);
 
       if (!img) {
         const allImages = post.querySelectorAll("img");
@@ -94,7 +124,7 @@
 
       let caption = "";
 
-      const captionEl = post.querySelector("span._ap3a._aacu");
+      const captionEl = queryWithFallback(INSTAGRAM_SELECTORS.caption, post);
       if (captionEl) {
         caption = captionEl.textContent.trim();
       }
@@ -212,16 +242,21 @@
             aiGeneratedScore: aiGeneratedScore,
             newsScore: newsScore,
             shouldHide: shouldHidePost(aiGeneratedScore, newsScore),
+            explanation: result.explanation || "",
           };
           postCache.set(post.imageUrl, hideResult);
           console.log(hideResult);
         } catch (err) {
           console.error("[AIBot Extension] API call failed:", err);
-          // Cache with default values to avoid repeated failed calls (0.0-1.0 scale)
+          // Do NOT cache failed results — allow retry on next scroll.
+          // Conservatively do NOT hide the post on API failure to avoid
+          // hiding legitimate content when the backend is unreachable.
           postCache.set(post.imageUrl, {
-            aiGeneratedScore: 0.5,
-            newsScore: 0.5,
+            aiGeneratedScore: 0,
+            newsScore: 0,
             shouldHide: false,
+            error: true,
+            explanation: "Analysis unavailable — backend error",
           });
         } finally {
           // Always remove from in-flight set when done (success or error)
@@ -258,7 +293,10 @@
     }
   }
 
-  function getPlaceholderHTML(postId) {
+  function getPlaceholderHTML(postId, explanation, aiScore, newsScore) {
+    const displayExplanation = explanation || "Content flagged by AIBot analysis";
+    const aiPercent = Math.round((aiScore || 0) * 100);
+    const newsPercent = Math.round((newsScore || 0) * 100);
     return `
       <div class="aibot-placeholder" data-post-id="${postId}" style="
         background-image: url('${chrome.runtime.getURL("crime-scene.png")}');
@@ -318,9 +356,39 @@
           <p style="
             color: #888;
             font-size: 14px;
-            margin: 0;
+            margin: 0 0 12px 0;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
           ">Removed by AIBot</p>
+          <div style="
+            color: #aaa;
+            font-size: 12px;
+            max-width: 280px;
+            line-height: 1.4;
+            margin-bottom: 12px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          ">${displayExplanation}</div>
+          <div style="
+            display: flex;
+            gap: 16px;
+            font-size: 11px;
+            color: #777;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          ">
+            <span>AI risk: ${aiPercent}%</span>
+            <span>Misinfo risk: ${newsPercent}%</span>
+          </div>
+          <button class="aibot-report-fp" style="
+            margin-top: 12px;
+            padding: 6px 14px;
+            background: transparent;
+            color: #888;
+            border: 1px solid #555;
+            border-radius: 14px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            transition: all 0.2s;
+          " onmouseover="this.style.borderColor='#4dabf7';this.style.color='#4dabf7'" onmouseout="this.style.borderColor='#555';this.style.color='#888'">Report false positive</button>
         </div>
       </div>
     `;
@@ -330,11 +398,21 @@
     if (post.element && post.imageUrl) {
       removedPostUrls.add(post.imageUrl);
 
+      const cachedResult = postCache.get(post.imageUrl) || {};
+      const explanation = cachedResult.explanation || "";
+      const aiScore = cachedResult.aiGeneratedScore || 0;
+      const newsScore = cachedResult.newsScore || 0;
+
       // Store original content before replacing
       originalPostContent.set(post.imageUrl, post.element.innerHTML);
 
       // Replace post content with placeholder while keeping the article element
-      post.element.innerHTML = getPlaceholderHTML(post.imageUrl);
+      post.element.innerHTML = getPlaceholderHTML(
+        post.imageUrl,
+        explanation,
+        aiScore,
+        newsScore,
+      );
       post.element.setAttribute("data-aibot-processed", "true");
       post.element.setAttribute("data-aibot-removed", "true");
 
@@ -347,6 +425,15 @@
         });
       }
 
+      // Add click handler to report false positive button
+      const reportBtn = post.element.querySelector(".aibot-report-fp");
+      if (reportBtn) {
+        reportBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          reportFalsePositive(post.imageUrl, post.caption || "");
+        });
+      }
+
       // Persist to storage
       chrome.storage.sync.set({
         removedPostUrls: Array.from(removedPostUrls),
@@ -356,6 +443,33 @@
       //   post.imageUrl.substring(0, 50) + "...",
       // );
     }
+  }
+
+  function reportFalsePositive(imageUrl, caption) {
+    const feedback = {
+      type: "false_positive",
+      imageUrl,
+      caption,
+      timestamp: Date.now(),
+    };
+
+    // Store locally for batch upload
+    chrome.storage.local.get(["falsePositiveReports"], (data) => {
+      const reports = data.falsePositiveReports || [];
+      reports.push(feedback);
+      chrome.storage.local.set({ falsePositiveReports: reports }, () => {
+        // Notify user
+        const btn = document.querySelector(
+          `.aibot-placeholder[data-post-id="${imageUrl}"] .aibot-report-fp`,
+        );
+        if (btn) {
+          btn.textContent = "Reported ✓";
+          btn.disabled = true;
+          btn.style.color = "#4dabf7";
+          btn.style.borderColor = "#4dabf7";
+        }
+      });
+    });
   }
 
   function showHiddenPost(element, imageUrl) {
@@ -380,7 +494,7 @@
     tempVisiblePosts.forEach((post) => {
       // Find the image URL from the restored content
       let img =
-        post.querySelector("div._aagu._aa20 div._aagv img") ||
+        queryWithFallback(INSTAGRAM_SELECTORS.postImage, post) ||
         post.querySelector('img[alt^="Photo by"]');
 
       if (!img) {
@@ -394,8 +508,14 @@
       const imageUrl = img ? img.src : null;
 
       if (imageUrl && originalPostContent.has(imageUrl)) {
+        const cachedResult = postCache.get(imageUrl) || {};
         // Replace with placeholder again
-        post.innerHTML = getPlaceholderHTML(imageUrl);
+        post.innerHTML = getPlaceholderHTML(
+          imageUrl,
+          cachedResult.explanation || "",
+          cachedResult.aiGeneratedScore || 0,
+          cachedResult.newsScore || 0,
+        );
         post.setAttribute("data-aibot-removed", "true");
         post.removeAttribute("data-aibot-temp-visible");
 
@@ -405,6 +525,15 @@
           showBtn.addEventListener("click", (e) => {
             e.stopPropagation();
             showHiddenPost(post, imageUrl);
+          });
+        }
+
+        // Re-attach false positive report handler
+        const reportBtn = post.querySelector(".aibot-report-fp");
+        if (reportBtn) {
+          reportBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            reportFalsePositive(imageUrl, "");
           });
         }
 
@@ -426,13 +555,7 @@
       return;
     }
 
-    let img = null;
-
-    img = postElement.querySelector("div._aagu._aa20 div._aagv img");
-
-    if (!img) {
-      img = postElement.querySelector('img[alt^="Photo by"]');
-    }
+    let img = queryWithFallback(INSTAGRAM_SELECTORS.postImage, postElement);
 
     if (!img) {
       const allImages = postElement.querySelectorAll("img");
@@ -455,7 +578,13 @@
         originalPostContent.set(imageUrl, postElement.innerHTML);
       }
 
-      postElement.innerHTML = getPlaceholderHTML(imageUrl);
+      const cachedResult = postCache.get(imageUrl) || {};
+      postElement.innerHTML = getPlaceholderHTML(
+        imageUrl,
+        cachedResult.explanation || "",
+        cachedResult.aiGeneratedScore || 0,
+        cachedResult.newsScore || 0,
+      );
       postElement.setAttribute("data-aibot-processed", "true");
       postElement.setAttribute("data-aibot-removed", "true");
 
@@ -465,6 +594,15 @@
         showBtn.addEventListener("click", (e) => {
           e.stopPropagation();
           showHiddenPost(postElement, imageUrl);
+        });
+      }
+
+      // Add click handler to report false positive button
+      const reportBtn = postElement.querySelector(".aibot-report-fp");
+      if (reportBtn) {
+        reportBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          reportFalsePositive(imageUrl, "");
         });
       }
 
@@ -486,7 +624,12 @@
           originalPostContent.set(imageUrl, postElement.innerHTML);
         }
 
-        postElement.innerHTML = getPlaceholderHTML(imageUrl);
+        postElement.innerHTML = getPlaceholderHTML(
+          imageUrl,
+          cachedResult.explanation || "",
+          cachedResult.aiGeneratedScore || 0,
+          cachedResult.newsScore || 0,
+        );
         postElement.setAttribute("data-aibot-processed", "true");
         postElement.setAttribute("data-aibot-removed", "true");
 
@@ -496,6 +639,15 @@
           showBtn.addEventListener("click", (e) => {
             e.stopPropagation();
             showHiddenPost(postElement, imageUrl);
+          });
+        }
+
+        // Add click handler to report false positive button
+        const reportBtn = postElement.querySelector(".aibot-report-fp");
+        if (reportBtn) {
+          reportBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            reportFalsePositive(imageUrl, "");
           });
         }
 
