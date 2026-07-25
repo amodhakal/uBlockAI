@@ -230,33 +230,44 @@
         inFlightUrls.add(post.imageUrl);
 
         try {
-          const result = await sendToBackend(payload);
-          console.log("[AIBot Extension] Received API result:");
-          console.log(result);
+          let result = null;
+          // 1. Run In-Browser ONNX Runtime classification for zero-latency detection
+          if (window.uBlockAIOnnx && window.uBlockAIOnnx.classifyTextLocally) {
+            result = await window.uBlockAIOnnx.classifyTextLocally(post.caption, post.imageAlt);
+            console.log("[AIBot Extension] In-Browser ONNX Runtime result:", result);
+          }
 
-          // Extract scores from AgentOutput response
-          // API returns ai_generated_risk_score and misinformation_risk_score as 0.0-1.0 decimals
-          const aiGeneratedScore = result.ai_generated_risk_score ?? 0;
-          const newsScore = result.misinformation_risk_score ?? 0;
+          // 2. If local confidence is low or if backend verification is needed, fallback/augment with backend API
+          if (!result || (result.ai_generated_risk_score < 0.2 && result.misinformation_risk_score < 0.2)) {
+            try {
+              const backendResult = await sendToBackend(payload);
+              if (backendResult) {
+                result = backendResult;
+                console.log("[AIBot Extension] Received Backend API result:", result);
+              }
+            } catch (backendErr) {
+              console.warn("[AIBot Extension] Backend call failed, using In-Browser ONNX result:", backendErr);
+            }
+          }
+
+          const aiGeneratedScore = result?.ai_generated_risk_score ?? 0;
+          const newsScore = result?.misinformation_risk_score ?? 0;
           const hideResult = {
             aiGeneratedScore: aiGeneratedScore,
             newsScore: newsScore,
             shouldHide: shouldHidePost(aiGeneratedScore, newsScore),
-            explanation: result.explanation || "",
+            explanation: result?.explanation || "Classified via In-Browser ONNX Runtime",
           };
           postCache.set(post.imageUrl, hideResult);
           console.log(hideResult);
         } catch (err) {
-          console.error("[AIBot Extension] API call failed:", err);
-          // Do NOT cache failed results — allow retry on next scroll.
-          // Conservatively do NOT hide the post on API failure to avoid
-          // hiding legitimate content when the backend is unreachable.
+          console.error("[AIBot Extension] Classification failed:", err);
           postCache.set(post.imageUrl, {
             aiGeneratedScore: 0,
             newsScore: 0,
             shouldHide: false,
             error: true,
-            explanation: "Analysis unavailable — backend error",
+            explanation: "Analysis unavailable",
           });
         } finally {
           // Always remove from in-flight set when done (success or error)
