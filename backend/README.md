@@ -29,3 +29,15 @@ python app/post_classifier.py --url "https://example.com/post" --caption "captio
 ```
 
 Output is JSON with OCR text, `llm_input_text` (OCR only or caption + OCR), and detected image URLs.
+
+## Run API Server
+
+```bash
+flask --app app.main run --host 0.0.0.0 --port 8000 --debug
+```
+
+Or for production:
+
+```bash
+gunicorn --bind 0.0.0.0:8000 app.main:app
+```

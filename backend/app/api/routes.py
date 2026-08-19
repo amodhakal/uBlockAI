@@ -1,12 +1,12 @@
 import os
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException
+from flask import Blueprint, jsonify, abort
 from app.schemas.agent_io import AgentContext, AgentOutput, ClaimInput
 from app.agents.langchain_agent import LangChainAgent
 from app.post_classifier import extract_post_text_for_llm
 import asyncio
 
-router = APIRouter()
+bp = Blueprint("api", __name__)
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 app_dir = os.path.dirname(base_dir)
@@ -42,7 +42,7 @@ class FeedbackRequest(BaseModel):
     reports: List[FeedbackReport]
 
 
-@router.post("/analyze_claims", response_model=AgentOutput)
+@bp.post("/analyze_claims")
 async def analyze_claims(payload: AnalyzeUrlRequest):
     agent_runner = LangChainAgent(api_key=OPENAI_API_KEY)
     try:
@@ -65,12 +65,12 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
             request_id=payload.request_id or "auto",
         )
         result = await agent_runner.run(claim_input)
-        return result
+        return jsonify(result.model_dump())
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        abort(500, description=str(e))
 
 
-@router.post("/feedback")
+@bp.post("/feedback")
 async def submit_feedback(payload: FeedbackRequest):
     """Receive false-positive/negative reports from the extension for later analysis."""
     try:
@@ -93,6 +93,6 @@ async def submit_feedback(payload: FeedbackRequest):
         with open(filepath, "w") as f:
             json.dump(existing, f, indent=2)
 
-        return {"received": len(payload.reports), "total_stored": len(existing)}
+        return jsonify({"received": len(payload.reports), "total_stored": len(existing)})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        abort(500, description=str(e))

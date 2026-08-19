@@ -1,26 +1,18 @@
-from fastapi import FastAPI
+from flask import Flask
+from flask_cors import CORS
 from dotenv import load_dotenv
 import os
-from app.api.routes import router as api_router
-
-from fastapi.middleware.cors import CORSMiddleware
+from app.api.routes import bp as api_bp
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(base_dir, '.env')
 load_dotenv(env_path)
-# load_dotenv() # Debug: Check if the API key is loaded
 
-app = FastAPI()
+app = Flask(__name__)
+CORS(app, origins="*", allow_headers=["*"], methods=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # dev only
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+print(os.getenv("BACKBOARD_API_KEY"))
+app.register_blueprint(api_bp, url_prefix="/api")
 
-
-
-print(os.getenv("BACKBOARD_API_KEY")) 
-app.include_router(api_router, prefix="/api")
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8000, debug=True)

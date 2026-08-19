@@ -24,9 +24,9 @@ uBlockAI acts as an ad-blocker analog for AI misinformation. It analyzes Instagr
 - **Background Service Worker**: Handles communication with backend API
 - **Popup Interface**: User settings and control panel
 
-### Backend (FastAPI + AI Agents)
+### Backend (Flask + AI Agents)
 - **Location**: `/backend/`
-- **Framework**: FastAPI with CORS support
+- **Framework**: Flask with CORS support
 - **AI Agents**: LangGraph-based multi-agent system
 - **Tools**:
   - Web Search Tool: Searches alternative news sources
@@ -43,7 +43,7 @@ uBlockAI acts as an ad-blocker analog for AI misinformation. It analyzes Instagr
 
 ### Backend
 - **Python 3.10+**
-- **FastAPI**: Web framework
+- **Flask**: Web framework
 - **LangChain/LangGraph**: AI agent orchestration
 - **Tesseract OCR**: Text extraction from images
 - **BeautifulSoup**: Web scraping
@@ -86,7 +86,11 @@ OPENAI_API_KEY=your_openai_api_key
 
 6. Start the server:
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+flask --app app.main run --host 0.0.0.0 --port 8000 --debug
+```
+Or for production:
+```bash
+gunicorn --bind 0.0.0.0:8000 app.main:app
 ```
 
 ### Chrome Extension Setup
@@ -135,7 +139,7 @@ uBlockAI/
 │   │   │   ├── langchain_agent.py   # Main AI agent orchestration
 │   │   │   └── prompts.py            # LLM prompts
 │   │   ├── api/
-│   │   │   └── routes.py             # FastAPI routes
+│   │   │   └── routes.py             # Flask routes (Blueprint)
 │   │   ├── tools/
 │   │   │   ├── web_search_tool.py    # Web search functionality
 │   │   │   ├── credibility_tool.py   # Source credibility assessment
@@ -145,7 +149,7 @@ uBlockAI/
 │   │   │   ├── agent_io.py           # Agent input/output schemas
 │   │   │   └── tool_io.py            # Tool input/output schemas
 │   │   ├── post_classifier.py        # OCR-based post classifier
-│   │   ├── main.py                   # FastAPI entry point
+│   │   ├── main.py                   # Flask entry point
 │   │   └── TestScript.ipynb          # Testing notebook
 │   └── requirements.txt
 ├── frontend/
