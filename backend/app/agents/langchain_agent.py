@@ -111,13 +111,20 @@ def build_agent(model: Optional[ChatOpenAI] = None) -> Any:
     ``state_modifier``, which langgraph no longer accepts: on the pinned
     langgraph 1.2.12 that argument raises TypeError, so every analysis request
     failed before the agent ran.
+
+    ``response_format`` makes the model emit an ``AgentOutput`` directly, so
+    the final message is already a validated instance rather than a JSON string
+    we have to parse and hope is well formed.
     """
     if model is None:
         from app.llm import get_chat_model
 
         model = get_chat_model(timeout=90.0)
     return create_react_agent(
-        model=model, tools=get_langchain_tools(), prompt=SYSTEM_PROMPT
+        model=model,
+        tools=get_langchain_tools(),
+        prompt=SYSTEM_PROMPT,
+        response_format=AgentOutput,
     )
 
 
@@ -181,8 +188,26 @@ class LangChainAgent:
         }
 
         result = await agent.ainvoke(initial_input)
-        messages = result.get("messages", []) if isinstance(result, dict) else []
+        if not isinstance(result, dict):
+            raise AgentOutputError(
+                f"Agent returned an unexpected result type: {type(result).__name__}"
+            )
 
+        # Preferred path: langgraph's response_format hands back an
+        # already-validated AgentOutput, so no JSON parsing is needed.
+        structured = result.get("structured_response")
+        if isinstance(structured, AgentOutput):
+            return structured
+        if isinstance(structured, dict):
+            try:
+                return AgentOutput(**structured)
+            except ValidationError as exc:
+                raise AgentOutputError(
+                    f"Agent structured response failed validation:\n{exc}"
+                ) from exc
+
+        # Fallback for when the provider could not honour response_format.
+        messages = result.get("messages", [])
         final_message = extract_final_message(messages)
         data = parse_agent_output(_message_content(final_message))
         data.setdefault("tool_rounds", 1)
