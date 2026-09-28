@@ -83,6 +83,11 @@ class Settings:
     analyze_rate_limit: int = 20
     feedback_rate_limit: int = 60
     rate_window_seconds: int = 60
+    # Analysis cache. 0 disables it; the default of one hour is long enough to
+    # absorb the re-flags, retries and re-renders of a single post without
+    # serving a verdict about content that has since changed.
+    cache_ttl_seconds: int = 3600
+    cache_max_entries: int = 256
 
     def require_api_key(self) -> str:
         if not self.openai_api_key:
@@ -125,6 +130,9 @@ def get_settings() -> Settings:
         analyze_rate_limit=_read_int("ANALYZE_RATE_LIMIT", 20, minimum=1),
         feedback_rate_limit=_read_int("FEEDBACK_RATE_LIMIT", 60, minimum=1),
         rate_window_seconds=_read_int("RATE_WINDOW_SECONDS", 60, minimum=1),
+        # minimum=0: zero TTL is the documented way to turn the cache off.
+        cache_ttl_seconds=_read_int("CACHE_TTL_SECONDS", 3600, minimum=0),
+        cache_max_entries=_read_int("CACHE_MAX_ENTRIES", 256, minimum=0),
     )
 
 

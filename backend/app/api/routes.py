@@ -22,6 +22,7 @@ from werkzeug.exceptions import HTTPException
 
 from app.agents.langchain_agent import AgentOutputError, LangChainAgent
 from app.auth import require_api_key
+from app.cache import cache_key, get_cache
 from app.config import get_settings
 from app.feedback_store import append_reports
 from app.image_bytes import (
@@ -243,6 +244,32 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
         payload.is_video,
     )
     try:
+        # Checked before any OCR, image decode or agent work: the point of the
+        # cache is to skip the expensive path entirely, and decoding the images
+        # to discover they are the same images we already answered would defeat
+        # it. The key is content-addressed, so this is safe for inline images;
+        # the URL is part of the key when it is not, because the OCR text is
+        # unknown until after the scrape.
+        key = cache_key(
+            url=payload.url,
+            caption=payload.caption,
+            alt_text=payload.alt_text,
+            images=payload.images,
+            max_images=payload.max_images,
+            settings=settings,
+        )
+        cache = get_cache(settings)
+        cached = cache.get(key)
+        if cached is not None:
+            logger.info(
+                "analysis cache hit request_id=%s verdict=%s",
+                request_id,
+                cached.get("verdict"),
+            )
+            response = jsonify(cached)
+            response.headers["X-Cache"] = "HIT"
+            return response
+
         # Decoding and verification happen before the agent, off the event loop
         # because Pillow decode is CPU-bound.
         decoded = await asyncio.to_thread(decode_inline_images, payload.images)
@@ -287,7 +314,13 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
             result.ai_generated_risk_score,
             result.tool_rounds,
         )
-        return jsonify(result.model_dump())
+        body = result.model_dump()
+        # Only successes are cached: storing a 502 would make a transient
+        # upstream failure sticky for the whole TTL.
+        cache.set(key, body)
+        response = jsonify(body)
+        response.headers["X-Cache"] = "MISS"
+        return response
     except ImageRejected as exc:
         # 400: the client sent something unacceptable. The message names the
         # rule, never the payload.

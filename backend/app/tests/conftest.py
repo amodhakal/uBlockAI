@@ -22,10 +22,12 @@ def _isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("REQUIRE_AUTH", "false")
     monkeypatch.setenv("API_KEYS_PATH", str(tmp_path / "api_keys.json"))
 
+    import app.cache as cache
     import app.config as config
     import app.rate_limit as rate_limit
 
     config.reset_settings_cache()
     yield config.get_settings()
     rate_limit.reset_limiters()
+    cache.reset_cache()
     config.reset_settings_cache()
