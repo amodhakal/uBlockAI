@@ -1,6 +1,7 @@
 import argparse
 import io
 import json
+import logging
 import re
 from typing import List
 from urllib.parse import urljoin, urlparse
@@ -10,10 +11,16 @@ import requests
 from bs4 import BeautifulSoup
 from PIL import Image, ImageEnhance, ImageOps
 
+from app.url_safety import UnsafeUrlError, validate_url
+
+logger = logging.getLogger(__name__)
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
+
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 
 
 def _session() -> requests.Session:
@@ -27,7 +34,28 @@ def _is_image_url(url: str) -> bool:
     return bool(re.search(r"\.(png|jpe?g|webp|bmp)$", parsed.path.lower()))
 
 
+def _is_allowed_image_candidate(url: str) -> bool:
+    """Whether a discovered image URL is on an allowed CDN.
+
+    The check used to be the substring ``"instagram" in candidate``, which
+    matched any URL containing those characters anywhere. A host such as
+    ``instagram.com.evil.net`` or ``notinstagram.com`` passed, and so did a
+    query string carrying the word. The host is now parsed and compared against
+    the allowlist as a registrable domain.
+    """
+    try:
+        validate_url(url)
+    except UnsafeUrlError:
+        return False
+    return True
+
+
 def _extract_image_urls(post_url: str, max_images: int = 3) -> List[str]:
+    # Validate before any network access. post_url is client-supplied, so this
+    # is the boundary that stops the backend being used to reach internal
+    # addresses and cloud metadata endpoints.
+    post_url = validate_url(post_url)
+
     if _is_image_url(post_url):
         return [post_url]
 
@@ -53,9 +81,13 @@ def _extract_image_urls(post_url: str, max_images: int = 3) -> List[str]:
     seen = set()
     image_urls: List[str] = []
     for candidate in candidates:
-        if candidate not in seen and ("instagram" in candidate or _is_image_url(candidate)):
-            seen.add(candidate)
-            image_urls.append(candidate)
+        if candidate in seen:
+            continue
+        if not _is_allowed_image_candidate(candidate):
+            logger.debug("skipping image candidate outside allowlist")
+            continue
+        seen.add(candidate)
+        image_urls.append(candidate)
         if len(image_urls) >= max_images:
             break
 
@@ -63,10 +95,26 @@ def _extract_image_urls(post_url: str, max_images: int = 3) -> List[str]:
 
 
 def _download_image(url: str) -> Image.Image:
+    # Re-validate: this URL came out of a remote document, so it is attacker
+    # influenced even when post_url itself was well formed.
+    url = validate_url(url)
     sess = _session()
-    response = sess.get(url, timeout=15)
+    response = sess.get(url, timeout=15, stream=True)
     response.raise_for_status()
-    return Image.open(io.BytesIO(response.content)).convert("RGB")
+
+    declared = response.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_DOWNLOAD_BYTES:
+        raise ValueError(f"image exceeds {MAX_DOWNLOAD_BYTES} bytes")
+
+    chunks: List[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        total += len(chunk)
+        if total > MAX_DOWNLOAD_BYTES:
+            raise ValueError(f"image exceeds {MAX_DOWNLOAD_BYTES} bytes")
+        chunks.append(chunk)
+
+    return Image.open(io.BytesIO(b"".join(chunks))).convert("RGB")
 
 
 def _preprocess_for_ocr(image: Image.Image, ocr_profile: str) -> List[Image.Image]:
@@ -174,6 +222,7 @@ def _extract_ocr_text(image_urls: List[str], ocr_profile: str) -> tuple[str, Lis
                 chunks.append(text.strip())
         except Exception as exc:
             errors.append(f"{image_url} -> {type(exc).__name__}: {exc}")
+            logger.warning("OCR failed for image: %s", errors[-1])
             continue
     return "\n".join(chunks), errors
 
