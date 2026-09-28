@@ -15,7 +15,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# scripts/dev_setup.py -> parents[0] is scripts/, parents[1] is the repo root.
+# parents[2] would be the repo's parent, which has no backend/ in it.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND = REPO_ROOT / "backend"
 EXTENSION = REPO_ROOT / "frontend" / "extension"
 VENV = BACKEND / ".venv"

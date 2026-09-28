@@ -205,7 +205,10 @@ async function postStream(path, body, options) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "ANALYZE_POST") {
-    postJson("/api/analyze_claims", msg.payload, msg.timeoutMs)
+    // The third argument is the options object, not a bare timeout: passing
+    // msg.timeoutMs there left options.apiKey undefined, so this fallback sent
+    // no X-API-Key and a secured backend answered 401.
+    postJson("/api/analyze_claims", msg.payload, { timeoutMs: msg.timeoutMs })
       .then((result) => sendResponse({ ok: true, result }))
       .catch((error) =>
         sendResponse({ ok: false, error: String(error?.message || error) }),
