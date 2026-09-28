@@ -15,6 +15,7 @@ import {
 } from "./src/lib/defaults.js";
 import { REPORT_KIND_LIST, bucketFor } from "./src/lib/feedback.js";
 import { logDebug, logError, setDebug } from "./src/lib/logging.js";
+import { isStreamResponse, parseSSE } from "./src/lib/progress.js";
 import {
   DEFAULT_BACKEND_URL,
   STORAGE_AREAS,
@@ -109,6 +110,99 @@ async function postJson(path, body, options = {}) {
   }
 }
 
+/**
+ * POST a streaming (SSE) analysis request and relay each event to `onEvent`.
+ *
+ * Why this lives in the service worker: a content script cannot read a
+ * cross-origin response body, and only the worker holds the API key. So the
+ * worker owns the stream and forwards parsed events over a Port.
+ *
+ * Degradation is deliberate and tested. If the backend has no stream endpoint
+ * (404), or something in the middle returns HTML instead, or the body is not a
+ * readable stream at all, this resolves with `{ streamed: false }` and the
+ * caller falls back to the plain JSON request. The failure is surfaced as a
+ * boolean rather than an exception because "no stream available" is an
+ * expected state, not an error.
+ *
+ * @param {object} body analyze payload
+ * @param {{timeoutMs?: number, onEvent: (event: object) => void, signal?: AbortSignal}} options
+ * @returns {Promise<{streamed: boolean, result?: object, error?: string}>}
+ */
+async function postStream(path, body, options) {
+  const baseUrl = await resolveBackendUrl();
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const onEvent = options.onEvent;
+
+  const headers = { "Content-Type": "application/json", Accept: "text/event-stream" };
+  if (options.apiKey) headers["X-API-Key"] = options.apiKey;
+
+  // The caller's signal (a cancelled analysis) and the timeout share one
+  // controller: either one has to be able to stop the request.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  if (options.signal) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener("abort", onExternalAbort);
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!isStreamResponse(response)) {
+      // Not a stream. Drain so the connection can be reused, then report it.
+      await response.body?.cancel?.().catch(() => {});
+      return { streamed: false };
+    }
+    if (!response.body) return { streamed: false };
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let remainder = "";
+    let result;
+    let error;
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const { events, remainder: rest } = parseSSE(
+        remainder + decoder.decode(value, { stream: true }),
+      );
+      remainder = rest;
+      for (const event of events) {
+        onEvent(event);
+        if (event.stage === "done") result = event.result;
+        if (event.stage === "error") error = event.message;
+      }
+    }
+
+    if (error) return { streamed: true, error };
+    if (!result) {
+      // The stream ended without a terminal event: the worker was torn down or
+      // the connection dropped. Not a fallback case, the analysis never
+      // finished.
+      return { streamed: true, error: "The analysis stream ended unexpectedly." };
+    }
+    return { streamed: true, result };
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      // A cancel is a normal outcome, not a failure to report as an error
+      // string the user will read.
+      return { streamed: true, aborted: true };
+    }
+    logDebug("stream", `streaming unavailable: ${error?.message}`);
+    return { streamed: false, error: String(error?.message || error) };
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onExternalAbort);
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "ANALYZE_POST") {
     postJson("/api/analyze_claims", msg.payload, msg.timeoutMs)
@@ -121,6 +215,108 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   return false;
 });
+
+/**
+ * Long-lived channel for a streaming analysis (#83).
+ *
+ * `chrome.runtime.sendMessage` cannot be used for this: it is a single
+ * request/response, and progress arrives many times over 20-60 seconds. A Port
+ * is bidirectional and long-lived, which is what a stream needs.
+ *
+ * The content script sends `{type: "analyze"}` and then receives
+ * `{type: "progress"}` messages until exactly one of
+ * `{type: "result"} | {type: "error"}` arrives. Disconnecting the port
+ * aborts the request, which is how the "Stop analysis" button cancels.
+ *
+ * @type {Set<AbortController>} in-flight streams, so a disconnect can abort
+ */
+const activeStreams = new Set();
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "aibot-analysis") return;
+
+  let controller = null;
+
+  port.onDisconnect.addListener(() => {
+    // The user closed the tab or the page navigated away. Abort rather than
+    // let a paid analysis keep running to a result nobody will read.
+    controller?.abort();
+    if (controller) activeStreams.delete(controller);
+  });
+
+  port.onMessage.addListener(async (msg) => {
+    if (msg?.type !== "analyze") return;
+    if (controller) return; // already running for this port
+
+    controller = new AbortController();
+    activeStreams.add(controller);
+
+    let result = null;
+    let error = null;
+    let aborted = false;
+
+    try {
+      const settings = await loadSettings();
+      const streamed = await postStream("/api/analyze_claims/stream", msg.payload, {
+        apiKey: settings.apiKey,
+        timeoutMs: msg.timeoutMs,
+        signal: controller.signal,
+        onEvent: (event) => {
+          if (event?.stage === "error") {
+            error = String(event.message || "Analysis failed.");
+            return;
+          }
+          if (event?.stage === "done") {
+            result = event.result;
+            return;
+          }
+          // A real stage from the backend. Relayed verbatim; the content
+          // script decides what to render and never invents a stage.
+          safePost(port, { type: "progress", event });
+        },
+      });
+
+      if (streamed.aborted) {
+        aborted = true;
+      } else if (streamed.streamed) {
+        if (error) throw new Error(error);
+        if (result) safePost(port, { type: "result", result });
+        else throw new Error("The analysis stream ended unexpectedly.");
+      } else {
+        // No stream available on this backend. Fall back to the request the
+        // extension has always made, and say so, so the content script can
+        // show "waiting" rather than stage names that are not coming.
+        safePost(port, { type: "progress", event: { stage: "received" } });
+        result = await postJson("/api/analyze_claims", msg.payload, {
+          apiKey: settings.apiKey,
+          timeoutMs: msg.timeoutMs,
+        });
+        safePost(port, { type: "result", result });
+      }
+    } catch (err) {
+      if (!aborted && err?.name !== "AbortError") {
+        safePost(port, { type: "error", error: String(err?.message || err) });
+      }
+    } finally {
+      if (controller) activeStreams.delete(controller);
+      controller = null;
+    }
+  });
+});
+
+/**
+ * Post to a port that may have gone away.
+ *
+ * A content script whose tab is closing will throw on postMessage. That is
+ * expected during teardown and must not take down the worker.
+ */
+function safePost(port, message) {
+  try {
+    port.postMessage(message);
+  } catch {
+    // Port already closed.
+  }
+}
 
 /**
  * Periodically drain the local feedback queues.

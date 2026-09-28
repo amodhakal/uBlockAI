@@ -409,6 +409,20 @@ const CSS = `
 .aibot-placeholder .aibot-claim-item a { color: #4dabf7; }
 .aibot-placeholder .aibot-claim-score { color: #e6e8ec; font-weight: 600; }
 .aibot-placeholder .aibot-claims-note { margin: 0 0 6px; color: #9aa3af; font-size: 12px; }
+.aibot-placeholder .aibot-progress { text-align: center; color: #cbd2dc; }
+.aibot-placeholder .aibot-progress-heading { font-size: 15px; font-weight: 600; margin: 0 0 10px; }
+.aibot-placeholder .aibot-progress-list { list-style: none; margin: 0 auto 12px; padding: 0; text-align: left; display: inline-block; font-size: 13px; }
+.aibot-placeholder .aibot-progress-item { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; color: #9aa3af; }
+.aibot-placeholder .aibot-progress-active { color: #e6e8ec; }
+.aibot-placeholder .aibot-progress-complete { color: #cbd2dc; }
+.aibot-placeholder .aibot-progress-marker { width: 1em; text-align: center; }
+.aibot-placeholder .aibot-progress-error { font-size: 13px; color: #ff8787; margin: 0 0 10px; }
+.aibot-placeholder .aibot-progress-cancel {
+  font: inherit; font-size: 12px; cursor: pointer;
+  border-radius: 999px; padding: 5px 12px; border: 1px solid #3b414b;
+  background: transparent; color: #9aa3af;
+}
+.aibot-placeholder .aibot-progress-cancel:hover { background: #22262d; color: #e6e8ec; }
 .aibot-placeholder button {
   font: inherit; font-size: calc(13px * var(--aibot-font-scale)); font-weight: 600; cursor: pointer;
   border-radius: 999px; min-height: 24px; padding: 8px 16px; border: 1px solid #3b414b;

@@ -36,6 +36,14 @@ import {
 } from "./lib/settings.js";
 
 import { addTrustedKey } from "./lib/trust.js";
+import { prefilterPosts } from "./lib/prefilter.js";
+import {
+  STAGES,
+  applyStage,
+  buildProgressPanel,
+  fallbackStages,
+  initialProgress,
+} from "./lib/progress.js";
 import {
   HIDING_ACTIONS,
   HIDDEN_KEY_WRITE_DEBOUNCE_MS,
@@ -74,6 +82,8 @@ const resultCache = new LruCache(MAX_CACHE_ENTRIES, {
 
 /** @type {Set<string>} post keys with an analysis in flight */
 const inFlight = new Set();
+/** @type {Map<string, () => void>} postKey -> cancel function for the live stream */
+const activeStreams = new Map();
 /** @type {Set<string>} post keys the user asked to trust */
 const trustedKeys = new Set();
 /** @type {Set<string>} post keys currently hidden */
@@ -143,6 +153,100 @@ function sendMessage(message) {
 }
 
 /**
+ * Analyse one post over the streaming port, reporting progress as it arrives.
+ *
+ * The service worker owns the network and the API key, so progress is relayed
+ * over a long-lived Port rather than fetched here: a content script cannot read
+ * a cross-origin response body at all.
+ *
+ * @param {object} post
+ * @param {string} postKey
+ * @param {(state: object) => void} onProgress
+ * @returns {Promise<{result: object|null, error: boolean, cancelled: boolean}>}
+ */
+function analysePostStreaming(post, postKey, onProgress) {
+  const payload = buildAnalyzePayload(post, postKey);
+
+  return new Promise((resolve) => {
+    let port;
+    let state = initialProgress();
+    let settled = false;
+
+    // Whatever the outcome, exactly one terminal message arrives and this
+    // disconnect is what stops the worker from holding a paid request open.
+    const finish = (outcome) => {
+      if (settled) return;
+      settled = true;
+      try {
+        port?.disconnect();
+      } catch {
+        // Already gone.
+      }
+      resolve(outcome);
+    };
+
+    try {
+      port = chrome.runtime.connect({ name: "aibot-analysis" });
+    } catch (error) {
+      // No service worker (extension reloading, for example). Fall back to
+      // the one-shot request rather than failing the post silently.
+      logError("analyze", "streaming port unavailable", { error: error.message });
+      void sendMessage({ type: "ANALYZE_POST", payload, timeoutMs: REQUEST_TIMEOUT_MS })
+        .then((result) => resolve({ result, error: false, cancelled: false }))
+        .catch(() => resolve({ result: null, error: true, cancelled: false }));
+      return;
+    }
+
+    onProgress(state);
+
+    port.onMessage.addListener((msg) => {
+      if (msg?.type === "progress") {
+        state = applyStage(state, msg.event);
+        onProgress(state);
+        return;
+      }
+      if (msg?.type === "result") {
+        finish({ result: msg.result, error: false, cancelled: false });
+        return;
+      }
+      if (msg?.type === "error") {
+        logError("analyze", "analysis failed", { postKey, error: msg.error });
+        finish({ result: null, error: true, cancelled: false });
+      }
+    });
+
+    // The port closed without a terminal message: the worker was torn down or
+    // the extension reloaded. Treated as a failure so the post is retried with
+    // backoff rather than left unprocessed forever.
+    port.onDisconnect.addListener(() => {
+      if (!settled) {
+        state = applyStage(state, {
+          stage: STAGES.ERROR,
+          message: "The analysis connection closed unexpectedly.",
+        });
+        onProgress(state);
+        finish({ result: null, error: true, cancelled: false });
+      }
+    });
+
+    port.postMessage({
+      type: "analyze",
+      payload,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+    });
+
+    // Cancel hook: disconnecting the port is what aborts the fetch in the
+    // worker, so a cancelled analysis stops costing money immediately rather
+    // than running to completion for a result nobody will read.
+    activeStreams.set(postKey, () => {
+      state = applyStage(state, { stage: STAGES.ERROR, message: "Analysis stopped." });
+      onProgress(state);
+      finish({ result: null, error: true, cancelled: true });
+    });
+  });
+}
+
+/**
  * Read the optional per-claim score array off a backend response.
  *
  * A spread of `[result.claim_scores, result.claims]` guards against `null`
@@ -163,6 +267,56 @@ function normalizeClaimArray(result) {
 }
 
 /**
+ * Show (or update) the in-place progress panel for a post.
+ *
+ * The panel replaces the post's content while the analysis runs, then the
+ * caller either swaps in the verdict placeholder or restores the original.
+ * Re-resolving by post key each time, for the same reason hidePost does: a
+ * virtualised feed recycles nodes and the captured element may now hold a
+ * different post.
+ *
+ * @param {object} post
+ * @param {string} postKey
+ * @param {object} state progress state
+ * @param {boolean} [fallback] render the non-streaming wording
+ */
+function renderProgress(post, postKey, state, fallback = false) {
+  const element =
+    resolvePostElement(postKey) || (post.element?.isConnected ? post.element : null);
+  if (!element || !isCurrentPost(element, postKey)) return;
+  if (element.querySelector(".aibot-placeholder")) return;
+
+  if (!originalContent.has(postKey)) {
+    originalContent.set(postKey, element.innerHTML);
+  }
+
+  const panel = buildProgressPanel(state, {
+    postKey,
+    stages: fallback ? fallbackStages : undefined,
+    onCancel: () => activeStreams.get(postKey)?.(),
+  });
+  element.replaceChildren(panel);
+  markPost(element, { postKey, state: "none" });
+}
+
+/**
+ * Restore a post's content after an analysis that produced no verdict.
+ * @param {object} post
+ * @param {string} postKey
+ */
+function clearProgress(post, postKey) {
+  const element =
+    resolvePostElement(postKey) || (post.element?.isConnected ? post.element : null);
+  if (!element) return;
+  if (element.querySelector(".aibot-progress")) {
+    const original = originalContent.get(postKey);
+    if (original) element.innerHTML = original;
+  }
+  element.removeAttribute("data-aibot-processed");
+  markPost(element, { postKey, state: "none" });
+}
+
+/**
  * Analyse one post, with a hard timeout and a conservative fallback.
  * @param {object} post
  * @returns {Promise<object>} a result record; never rejects
@@ -171,57 +325,66 @@ async function analysePost(post) {
   const postKey = stableCacheKey(post);
   if (!postKey) return { postKey: "", error: true };
 
-  const payload = buildAnalyzePayload(post, postKey);
+  // The service worker reads the backend URL and API key from its own storage,
+  // so the content script never carries the secret. Progress comes back over
+  // the same port; if the worker cannot stream, it falls back to the plain
+  // JSON request internally and the panel shows the non-streaming wording.
+  const outcome = await analysePostStreaming(post, postKey, (state) => {
+    const fallback = state.seen.length <= 1 && state.seen[0] === STAGES.RECEIVED;
+    renderProgress(post, postKey, state, fallback);
+  });
 
-  try {
-    // The service worker reads the backend URL and API key from its own
-    // storage, so the content script never carries the secret.
-    const result = await sendMessage({
-      type: "ANALYZE_POST",
-      payload,
-      timeoutMs: REQUEST_TIMEOUT_MS,
-    });
+  activeStreams.delete(postKey);
 
-    const aiScore = Number(result?.ai_generated_risk_score ?? 0);
-    const newsScore = Number(result?.misinformation_risk_score ?? 0);
-
-    // Scores are cached, not the hide decision. Caching the decision meant a
-    // slider change had no effect on posts already in the cache: the entry
-    // still said shouldHide true or false, so re-filtering was impossible.
-    // The verdict, reasoning chain, evidence and uncertainties are passed
-    // through untouched for the explanation detail view (#79); they are
-    // display-only and never influence the hide decision.
-    return {
-      postKey,
-      aiScore,
-      newsScore,
-      explanation: String(result?.explanation || ""),
-      verdict: result?.verdict || null,
-      confidence:
-        result?.confidence === null || result?.confidence === undefined
-          ? null
-          : Number(result.confidence),
-      reasoning_chain: Array.isArray(result?.reasoning_chain)
-        ? result.reasoning_chain.map(String).slice(0, 20)
-        : [],
-      evidence: Array.isArray(result?.evidence) ? result.evidence.slice(0, 20) : [],
-      uncertainties: Array.isArray(result?.uncertainties)
-        ? result.uncertainties.map(String).slice(0, 20)
-        : [],
-      tool_rounds: Number(result?.tool_rounds ?? 0) || 0,
-      // Claim-level scores (#86). AgentOutput has no per-claim field today, so
-      // this is normally an empty array and the detail view omits the section.
-      // It is carried through rather than dropped so the UI lights up the
-      // moment the backend starts returning it, with no extension change.
-      claim_scores: normalizeClaimArray(result),
-      error: false,
-    };
-  } catch (error) {
-    // Never hide on failure. Hiding a legitimate post because the backend was
-    // unreachable is worse than showing misinformation once.
-    logError("analyze", "request failed", { postKey, error: error.message });
+  if (outcome.cancelled) {
+    clearProgress(post, postKey);
     return { postKey, aiScore: 0, newsScore: 0, explanation: "", error: true };
   }
+
+  if (outcome.error || !outcome.result) {
+    // Never hide on failure. Hiding a legitimate post because the backend was
+    // unreachable is worse than showing misinformation once.
+    logError("analyze", "request failed", { postKey });
+    clearProgress(post, postKey);
+    return { postKey, aiScore: 0, newsScore: 0, explanation: "", error: true };
+  }
+
+  const result = outcome.result;
+  const aiScore = Number(result?.ai_generated_risk_score ?? 0);
+  const newsScore = Number(result?.misinformation_risk_score ?? 0);
+
+  // Scores are cached, not the hide decision. Caching the decision meant a
+  // slider change had no effect on posts already in the cache: the entry
+  // still said shouldHide true or false, so re-filtering was impossible.
+  // The verdict, reasoning chain, evidence and uncertainties are passed
+  // through untouched for the explanation detail view (#79); they are
+  // display-only and never influence the hide decision.
+  clearProgress(post, postKey);
+  return {
+    postKey,
+    aiScore,
+    newsScore,
+    explanation: String(result?.explanation || ""),
+    verdict: result?.verdict || null,
+    confidence:
+      result?.confidence === null || result?.confidence === undefined
+        ? null
+        : Number(result.confidence),
+    reasoning_chain: Array.isArray(result?.reasoning_chain)
+      ? result.reasoning_chain.map(String).slice(0, 20)
+      : [],
+    evidence: Array.isArray(result?.evidence) ? result.evidence.slice(0, 20) : [],
+    uncertainties: Array.isArray(result?.uncertainties)
+      ? result.uncertainties.map(String).slice(0, 20)
+      : [],
+    tool_rounds: Number(result?.tool_rounds ?? 0) || 0,
+    // Claim-level scores (#86). AgentOutput has no per-claim field today, so
+    // this is normally an empty array and the detail view omits the section.
+    // It is carried through rather than dropped so the UI lights up the
+    // moment the backend starts returning it, with no extension change.
+    claim_scores: normalizeClaimArray(result),
+    error: false,
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -563,7 +726,26 @@ async function scan() {
 
   // Everything already known, applied without a network call.
   const pending = [];
-  for (const post of posts) {
+
+  // Cheap client-side pre-filter (#66), run before anything enters inFlight or
+  // analysePost. A skipped post is marked processed so the next scan does not
+  // re-evaluate it: the cost of the pre-filter has to be one-time, otherwise
+  // re-running it every scroll costs more than it saves.
+  //
+  // A skipped post is marked SAFE, not "processed with no verdict". That is a
+  // real statement - nothing to check was found - so the post stays visible and
+  // a later threshold change still applies to everything else normally.
+  const { keep, skipped } = prefilterPosts(posts, { trustedKeys });
+  if (skipped.length > 0) {
+    for (const { post, reason } of skipped) {
+      const postKey = stableCacheKey(post);
+      if (!postKey) continue;
+      logDebug("prefilter", `skipped ${reason}`, { postKey });
+      markSafe(post, postKey);
+    }
+  }
+
+  for (const post of keep) {
     const postKey = stableCacheKey(post);
     const cached = resultCache.get(postKey);
     if (cached) {
