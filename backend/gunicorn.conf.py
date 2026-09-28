@@ -64,7 +64,9 @@ worker_class = "gthread"
 
 _default_threads = min(16, (multiprocessing.cpu_count() or 1) * 2)
 threads = int(os.getenv("GUNICORN_THREADS", str(_default_threads)))
-workers = int(os.getenv("GUNICORN_WORKERS", str(min(multiprocessing.cpu_count() or 1, 4))))
+workers = int(
+    os.getenv("GUNICORN_WORKERS", str(min(multiprocessing.cpu_count() or 1, 4)))
+)
 
 # Reload in development, never in production.
 reload = os.getenv("GUNICORN_RELOAD", "false").lower() in {"1", "true", "yes", "on"}

@@ -18,9 +18,14 @@ def _isolated_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
     monkeypatch.delenv("DEBUG", raising=False)
     monkeypatch.delenv("ALLOWED_ORIGINS", raising=False)
+    # Auth is on by default in production, so tests must opt out explicitly.
+    monkeypatch.setenv("REQUIRE_AUTH", "false")
+    monkeypatch.setenv("API_KEYS_PATH", str(tmp_path / "api_keys.json"))
 
     import app.config as config
+    import app.rate_limit as rate_limit
 
     config.reset_settings_cache()
     yield config.get_settings()
+    rate_limit.reset_limiters()
     config.reset_settings_cache()

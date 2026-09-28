@@ -23,6 +23,11 @@ backend/app/.env
 .env
 .env.*
 
+# API key registry: a credential store, never committed.
+app/api_keys.json
+app/api_keys.json.tmp
+app/**/api_keys.json
+
 # Logs
 *.log
 
