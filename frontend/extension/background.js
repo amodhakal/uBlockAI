@@ -1,14 +1,38 @@
 /**
  * Service worker: owns all network access.
  *
- * The backend URL is still a constant here; making it configurable is handled
- * separately so the module split and the configuration change stay separable.
+ * The backend URL and API key are read from storage per request rather than
+ * captured at module scope: a service worker is torn down after roughly 30
+ * seconds idle, so a module-level constant can be arbitrarily stale relative to
+ * a settings change.
  */
 
 import { REQUEST_TIMEOUT_MS } from "./src/lib/defaults.js";
+import {
+  DEFAULT_BACKEND_URL,
+  loadSettings,
+  normalizeBackendUrl,
+  writeLocal,
+} from "./src/lib/settings.js";
 
 const BRAND = "uBlockAI";
-const BACKEND_URL = "https://hack-ncstate-2026.onrender.com";
+
+/**
+ * Resolve the backend base URL from storage.
+ *
+ * This was a hardcoded constant, so a self-hosted deployment was impossible
+ * without editing and rebuilding the extension.
+ *
+ * @returns {Promise<string>}
+ */
+async function resolveBackendUrl() {
+  try {
+    const stored = await chrome.storage.sync.get(["backendUrl"]);
+    return normalizeBackendUrl(stored?.backendUrl);
+  } catch {
+    return DEFAULT_BACKEND_URL;
+  }
+}
 
 /**
  * POST JSON to the backend with a hard timeout.
@@ -18,23 +42,39 @@ const BACKEND_URL = "https://hack-ncstate-2026.onrender.com";
  *
  * @param {string} path
  * @param {object} body
- * @param {number} [timeoutMs]
+ * @param {{baseUrl?: string, apiKey?: string, timeoutMs?: number}} [options]
  * @returns {Promise<any>}
  */
-async function postJson(path, body, timeoutMs = REQUEST_TIMEOUT_MS) {
+async function postJson(path, body, options = {}) {
+  const baseUrl = options.baseUrl
+    ? normalizeBackendUrl(options.baseUrl)
+    : await resolveBackendUrl();
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+
+  const headers = { "Content-Type": "application/json" };
+  // The key is collected in the options page and stored in local storage
+  // rather than sync, because Chrome sync is not end-to-end encrypted.
+  if (options.apiKey) headers["X-API-Key"] = options.apiKey;
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${BACKEND_URL}${path}`, {
+    const response = await fetch(`${baseUrl}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
 
     if (response.status === 429) {
-      throw new Error("Rate limited by the analysis backend. Try again shortly.");
+      // Honour Retry-After so a rate-limited client backs off for as long as
+      // the server asked, instead of retrying immediately and extending the
+      // penalty.
+      const retryAfter = Number(response.headers.get("Retry-After"));
+      const wait =
+        Number.isFinite(retryAfter) && retryAfter > 0 ? ` Retry in ${retryAfter}s.` : "";
+      throw new Error(`Rate limited by the analysis backend.${wait}`);
     }
     if (!response.ok) {
       const text = await response.text().catch(() => "");
@@ -85,6 +125,7 @@ async function flushFeedback() {
     const queue = data.falsePositiveReports;
     if (!Array.isArray(queue) || queue.length === 0) return;
 
+    const settings = await loadSettings();
     await postJson(
       "/api/feedback",
       {
@@ -96,9 +137,9 @@ async function flushFeedback() {
           post_key: entry.postKey,
         })),
       },
-      20_000,
+      { baseUrl: settings.backendUrl, apiKey: settings.apiKey, timeoutMs: 20_000 },
     );
-    await chrome.storage.local.set({ falsePositiveReports: [] });
+    await writeLocal({ falsePositiveReports: [] });
   } catch (error) {
     // Keep the queue for the next attempt rather than dropping user reports.
     console.warn(`[${BRAND}] feedback upload deferred: ${error?.message || error}`);

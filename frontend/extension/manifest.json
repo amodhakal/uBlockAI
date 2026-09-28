@@ -10,12 +10,22 @@
     "type": "module"
   },
   "host_permissions": [
-    "https://hack-ncstate-2026.onrender.com/*",
-    "https://www.instagram.com/*"
+    "https://www.instagram.com/*",
+    "https://instagram.com/*",
+    "https://hack-ncstate-2026.onrender.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "uBlockAI"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "content_scripts": [
     {

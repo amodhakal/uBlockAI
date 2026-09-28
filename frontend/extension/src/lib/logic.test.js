@@ -4,15 +4,21 @@
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
   DEFAULT_AI_GENERATED_THRESHOLD,
   DEFAULT_NEWS_THRESHOLD,
+  HIDING_ACTIONS,
+  MAX_ALT_TEXT_CHARS,
+  MAX_CAPTION_CHARS,
   fromSlider,
   shouldHidePost,
   toSlider,
 } from "./defaults.js";
+import { buildAnalyzePayload, truncate } from "./payload.js";
+import { DEFAULT_BACKEND_URL, normalizeBackendUrl, parseBackendUrl } from "./settings.js";
 import {
   LruCache,
   compactStorageKey,
@@ -225,4 +231,147 @@ test("matchesPattern handles wildcards and exact matches", () => {
 test("adapterForUrl picks the platform adapter", () => {
   assert.equal(adapterForUrl("https://www.instagram.com/").id, "instagram");
   assert.equal(adapterForUrl("https://example.com/").id, "generic");
+});
+
+// --------------------------------------------------------------------------
+// Backend URL configuration
+// --------------------------------------------------------------------------
+
+test("parseBackendUrl accepts an https origin and strips trailing slashes", () => {
+  for (const input of [
+    "https://api.example.com",
+    "https://api.example.com/",
+    "https://api.example.com///",
+    "  https://api.example.com  ",
+  ]) {
+    const out = parseBackendUrl(input);
+    assert.equal(out.ok, true, `rejected ${input}`);
+    assert.equal(out.url, "https://api.example.com");
+  }
+});
+
+test("parseBackendUrl accepts http on loopback only", () => {
+  assert.equal(parseBackendUrl("http://localhost:8000").ok, true);
+  assert.equal(parseBackendUrl("http://127.0.0.1:8000").ok, true);
+  const remote = parseBackendUrl("http://api.example.com");
+  assert.equal(remote.ok, false);
+  assert.match(remote.error, /localhost/);
+});
+
+test("parseBackendUrl rejects dangerous and malformed schemes", () => {
+  for (const input of [
+    "javascript:alert(1)",
+    "data:text/html,<script>",
+    "file:///etc/passwd",
+    "ftp://example.com",
+    "not a url",
+    "",
+    "   ",
+  ]) {
+    assert.equal(parseBackendUrl(input).ok, false, `accepted ${input}`);
+  }
+});
+
+test("parseBackendUrl rejects a path, query or fragment", () => {
+  assert.equal(parseBackendUrl("https://api.example.com/v1").ok, false);
+  assert.equal(parseBackendUrl("https://api.example.com?a=1").ok, false);
+  assert.equal(parseBackendUrl("https://api.example.com#x").ok, false);
+});
+
+test("normalizeBackendUrl falls back to the default for anything rejected", () => {
+  for (const input of ["", "garbage", "javascript:alert(1)", "https://x.example/p"]) {
+    assert.equal(normalizeBackendUrl(input), DEFAULT_BACKEND_URL);
+  }
+});
+
+test("normalizeBackendUrl is idempotent", () => {
+  const once = normalizeBackendUrl("https://api.example.com/");
+  assert.equal(normalizeBackendUrl(once), once);
+});
+
+// --------------------------------------------------------------------------
+// Payload limits
+// --------------------------------------------------------------------------
+
+test("truncate keeps short text verbatim and marks cut text", () => {
+  assert.equal(truncate("hello", 10), "hello");
+  const cut = truncate("x".repeat(50), 10);
+  assert.equal(cut.length, 10);
+  assert.ok(cut.endsWith("…"));
+});
+
+test("buildAnalyzePayload does not cut a long caption at 100 characters", () => {
+  // The original bug: captions were truncated to 100 chars, discarding most of
+  // the claim. A 500-character caption must arrive intact.
+  const caption = "s".repeat(500);
+  const payload = buildAnalyzePayload({ imageUrl: "u", caption }, "p:1");
+  assert.equal(payload.caption, caption);
+  assert.equal(payload.caption.length, 500);
+});
+
+test("buildAnalyzePayload caps caption and alt text at their constants", () => {
+  const payload = buildAnalyzePayload(
+    {
+      imageUrl: "u",
+      caption: "c".repeat(MAX_CAPTION_CHARS + 500),
+      imageAlt: "a".repeat(9999),
+    },
+    "p:1",
+  );
+  assert.ok(payload.caption.length <= MAX_CAPTION_CHARS);
+  assert.ok(payload.alt_text.length <= MAX_ALT_TEXT_CHARS);
+});
+
+test("buildAnalyzePayload carries the permalink and video flag", () => {
+  const payload = buildAnalyzePayload(
+    { imageUrl: "u", caption: "c", permalink: "/p/ABC/", isVideo: true },
+    "p:ABC",
+  );
+  assert.deepEqual(payload.metadata, { permalink: "/p/ABC/" });
+  assert.equal(payload.is_video, true);
+  assert.equal(payload.post_key, "p:ABC");
+});
+
+// --------------------------------------------------------------------------
+// Drift guards: the markup must not restate the shared constants
+// --------------------------------------------------------------------------
+
+test("popup.html does not hardcode the slider range", () => {
+  const html = readFileSync(new URL("../../popup.html", import.meta.url), "utf8");
+  assert.ok(!/type="range"[\s\S]{0,200}?min="/.test(html), "slider min is hardcoded");
+  assert.ok(!/type="range"[\s\S]{0,200}?max="/.test(html), "slider max is hardcoded");
+});
+
+test("popup.html does not restate the hiding actions", () => {
+  const html = readFileSync(new URL("../../popup.html", import.meta.url), "utf8");
+  for (const action of Object.values(HIDING_ACTIONS)) {
+    assert.ok(!html.includes(`value="${action}"`), `${action} is hardcoded in markup`);
+  }
+});
+
+test("manifest.json declares the options page the popup links to", () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../../manifest.json", import.meta.url), "utf8"),
+  );
+  assert.ok(
+    manifest.options_ui,
+    "options_ui missing: openOptionsPage() would be a no-op",
+  );
+  assert.equal(manifest.options_ui.page, "options.html");
+});
+
+test("manifest.json requests a host permission for the default backend", () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../../manifest.json", import.meta.url), "utf8"),
+  );
+  const hosts = [
+    ...(manifest.host_permissions || []),
+    ...(manifest.optional_host_permissions || []),
+  ];
+  const parsed = new URL(DEFAULT_BACKEND_URL);
+  const suffix = `${parsed.origin}/*`;
+  assert.ok(
+    hosts.includes(suffix),
+    `no host permission for the default backend (${suffix}); requests would fail`,
+  );
 });

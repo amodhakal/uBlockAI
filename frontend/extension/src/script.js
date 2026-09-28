@@ -10,6 +10,7 @@ import { adapterForUrl, collectPosts, queryWithFallback } from "./adapters/index
 import { LruCache, compactStorageKey, stableCacheKey } from "./lib/cache.js";
 import { runBounded, withTimeout } from "./lib/concurrency.js";
 import { queueReport } from "./lib/feedback.js";
+import { buildAnalyzePayload } from "./lib/payload.js";
 import { buildPlaceholder, installStyles } from "./lib/placeholder.js";
 import { loadSettings, onSettingsChanged, readSync, writeSync } from "./lib/settings.js";
 import {
@@ -80,24 +81,15 @@ async function analysePost(post) {
   const postKey = stableCacheKey(post);
   if (!postKey) return { postKey: "", error: true };
 
-  const payload = {
-    post_key: postKey,
-    url: post.imageUrl,
-    caption: post.caption || "",
-    alt_text: post.imageAlt || "",
-    metadata: post.permalink ? { permalink: post.permalink } : {},
-    is_video: Boolean(post.isVideo),
-  };
+  const payload = buildAnalyzePayload(post, postKey);
 
   try {
+    // The service worker reads the backend URL and API key from its own
+    // storage, so the content script never carries the secret.
     const result = await sendMessage({
       type: "ANALYZE_POST",
       payload,
-      settings: {
-        backendUrl: settings.backendUrl,
-        apiKey: settings.apiKey,
-        timeoutMs: REQUEST_TIMEOUT_MS,
-      },
+      timeoutMs: REQUEST_TIMEOUT_MS,
     });
 
     const aiScore = Number(result?.ai_generated_risk_score ?? 0);

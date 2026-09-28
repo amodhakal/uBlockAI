@@ -40,15 +40,7 @@
                 >3</output
               >
             </div>
-            <input
-              type="range"
-              id="aiThreshold"
-              min="1"
-              max="10"
-              step="1"
-              value="3"
-              aria-describedby="aiThresholdHelp"
-            />
+            <input type="range" id="aiThreshold" aria-describedby="aiThresholdHelp" />
             <p class="field-help" id="aiThresholdHelp">Lower hides more content</p>
           </div>
 
@@ -59,15 +51,7 @@
                 >2</output
               >
             </div>
-            <input
-              type="range"
-              id="newsThreshold"
-              min="1"
-              max="10"
-              step="1"
-              value="2"
-              aria-describedby="newsThresholdHelp"
-            />
+            <input type="range" id="newsThreshold" aria-describedby="newsThresholdHelp" />
             <p class="field-help" id="newsThresholdHelp">Lower hides more content</p>
           </div>
 
@@ -75,11 +59,10 @@
             <div class="field-label">
               <label for="hidingAction">When content is hidden</label>
             </div>
-            <select id="hidingAction">
-              <option value="placeholder">Replace with a warning</option>
-              <option value="blur">Blur the image</option>
-              <option value="remove">Remove it from the feed</option>
-            </select>
+            <select id="hidingAction" aria-describedby="hidingActionHelp"></select>
+            <p class="field-help" id="hidingActionHelp">
+              Blurring keeps the image recognisable; removing hides it entirely.
+            </p>
           </div>
 
           <p class="footer">

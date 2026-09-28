@@ -1,3 +1,5 @@
+import { MAX_CAPTION_CHARS } from "../lib/defaults.js";
+
 /**
  * Per-platform DOM adapters.
  *
@@ -179,7 +181,7 @@ export function matchesPattern(href, pattern) {
  * @returns {RawPost[]}
  */
 export function collectPosts(adapter, root, options = {}) {
-  const maxCaptionChars = options.maxCaptionChars ?? 3000;
+  const maxCaptionChars = options.maxCaptionChars ?? MAX_CAPTION_CHARS;
   const elements = queryAllWithFallback(adapter.postSelectors, root);
   const posts = [];
 

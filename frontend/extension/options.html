@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>uBlockAI settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>uBlockAI settings</h1>
+      <p class="lede">
+        Point the extension at your own backend to self-host, or use the hosted service.
+      </p>
+
+      <form id="optionsForm" novalidate>
+        <div class="field">
+          <div class="field-label">
+            <label for="backendUrl">Backend URL</label>
+          </div>
+          <input
+            type="url"
+            id="backendUrl"
+            name="backendUrl"
+            inputmode="url"
+            spellcheck="false"
+            autocomplete="off"
+            aria-describedby="backendUrlHelp"
+          />
+          <p class="field-help" id="backendUrlHelp">
+            Hosted default: <span id="backendUrlDefault"></span>. Use http only for
+            <code>localhost</code>.
+          </p>
+        </div>
+
+        <div class="field">
+          <div class="field-label">
+            <label for="apiKey">API key</label>
+          </div>
+          <input
+            type="password"
+            id="apiKey"
+            name="apiKey"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="apiKeyHelp"
+          />
+          <p class="field-help" id="apiKeyHelp">
+            Stored on this device only and never synced to your Google account. Leave
+            blank if your backend does not require one.
+          </p>
+        </div>
+
+        <div class="actions">
+          <button type="submit" id="save" class="primary">Save</button>
+          <button type="button" id="testConnection">Test connection</button>
+          <button type="button" id="reset" class="quiet">Reset to defaults</button>
+        </div>
+
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+        <p id="error" class="error" role="alert"></p>
+      </form>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

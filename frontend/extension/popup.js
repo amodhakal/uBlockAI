@@ -7,6 +7,8 @@
 
 import {
   HIDING_ACTIONS,
+  SLIDER_MAX,
+  SLIDER_MIN,
   STORAGE_KEYS,
   fromSlider,
   toSlider,
@@ -14,6 +16,13 @@ import {
 import { loadSettings, readSync, writeSync } from "./src/lib/settings.js";
 
 const BRAND = "uBlockAI";
+
+/** Human labels for the hiding actions, in the order they should appear. */
+const ACTION_LABELS = {
+  [HIDING_ACTIONS.PLACEHOLDER]: "Replace with a warning",
+  [HIDING_ACTIONS.BLUR]: "Blur the image",
+  [HIDING_ACTIONS.REMOVE]: "Remove it from the feed",
+};
 
 /** Hosts the extension is expected to run on. */
 const SUPPORTED = ["instagram.com"];
@@ -66,6 +75,23 @@ async function init() {
   }
 
   const settings = await loadSettings();
+
+  // The slider range and the available hiding actions come from the shared
+  // constants rather than from markup. They used to be hardcoded in the HTML,
+  // where they had already drifted: the markup said the AI threshold defaulted
+  // to 3 while the constant it duplicated resolves to 4.
+  for (const slider of [els.aiSlider, els.newsSlider]) {
+    slider.min = String(SLIDER_MIN);
+    slider.max = String(SLIDER_MAX);
+    slider.step = "1";
+  }
+
+  for (const action of Object.values(HIDING_ACTIONS)) {
+    const option = document.createElement("option");
+    option.value = action;
+    option.textContent = ACTION_LABELS[action] ?? action;
+    els.actionSelect.append(option);
+  }
 
   els.aiSlider.value = String(toSlider(settings.aiGeneratedThreshold));
   els.aiValue.textContent = els.aiSlider.value;
