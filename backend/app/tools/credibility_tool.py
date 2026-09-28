@@ -1,9 +1,12 @@
 import json
+import logging
 from typing import Any, Dict, List
 from urllib.parse import urlparse
 from langchain_core.tools import tool
 
 from app.agents.prompts import CREDIBILITY_TOOL_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 def _get_llm():
@@ -27,8 +30,6 @@ async def credibility_llm(sources: List[Dict[str, Any]]) -> Dict[str, Any]:
     Returns:
         Dict with items containing url, domain, tier, rationale, and signals
     """
-    print("Evaluating source credibility...")
-
     normalized = []
     for s in sources:
         url = s.get("url")
@@ -42,6 +43,8 @@ async def credibility_llm(sources: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "snippet": s.get("snippet"),
             }
         )
+
+    logger.debug("rating credibility for %d sources", len(normalized))
 
     messages = [
         {"role": "system", "content": CREDIBILITY_TOOL_PROMPT},
