@@ -8,7 +8,7 @@
  */
 
 import { FEEDBACK_INTERVAL_MINUTES, REQUEST_TIMEOUT_MS } from "./src/lib/defaults.js";
-import { REPORT_KINDS } from "./src/lib/feedback.js";
+import { REPORT_KIND_LIST, bucketFor } from "./src/lib/feedback.js";
 import { logDebug, logError, setDebug } from "./src/lib/logging.js";
 import {
   DEFAULT_BACKEND_URL,
@@ -113,7 +113,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
  * UPLOAD_REPORTS message type that nothing ever sent has been removed.
  */
 async function flushFeedback() {
-  for (const kind of REPORT_KINDS) {
+  for (const kind of REPORT_KIND_LIST) {
     try {
       await flushOne(kind);
     } catch (error) {
@@ -124,29 +124,31 @@ async function flushFeedback() {
 }
 
 async function flushOne(kind) {
-  {
-    const data = await readSync([kind], STORAGE_AREAS.LOCAL);
-    const queue = data[kind];
-    if (!Array.isArray(queue) || queue.length === 0) return;
+  // The queue is stored under the bucket key, not the report kind. Reading by
+  // kind found nothing every time, so reports accumulated forever and the
+  // feedback loop never actually closed.
+  const bucket = bucketFor(kind);
+  const data = await readSync([bucket], STORAGE_AREAS.LOCAL);
+  const queue = data[bucket];
+  if (!Array.isArray(queue) || queue.length === 0) return;
 
-    const settings = await loadSettings();
-    await postJson(
-      "/api/feedback",
-      {
-        reports: queue.map((entry) => ({
-          type: entry.type,
-          imageUrl: entry.imageUrl,
-          caption: entry.caption,
-          timestamp: entry.timestamp,
-          post_key: entry.postKey,
-        })),
-      },
-      { baseUrl: settings.backendUrl, apiKey: settings.apiKey, timeoutMs: 20_000 },
-    );
-    // Cleared only on success, so a failed upload retries next time.
-    await writeSync({ [kind]: [] }, STORAGE_AREAS.LOCAL);
-    logDebug("feedback", `uploaded ${queue.length} ${kind} reports`);
-  }
+  const settings = await loadSettings();
+  await postJson(
+    "/api/feedback",
+    {
+      reports: queue.map((entry) => ({
+        type: entry.type,
+        imageUrl: entry.imageUrl,
+        caption: entry.caption,
+        timestamp: entry.timestamp,
+        post_key: entry.postKey,
+      })),
+    },
+    { baseUrl: settings.backendUrl, apiKey: settings.apiKey, timeoutMs: 20_000 },
+  );
+  // Cleared only on success, so a failed upload retries next time.
+  await writeSync({ [bucket]: [] }, STORAGE_AREAS.LOCAL);
+  logDebug("feedback", `uploaded ${queue.length} ${kind} reports`);
 }
 
 // The service worker has no settings module loaded at startup, so read the

@@ -250,6 +250,63 @@ export function buildPlaceholder(params) {
   return root;
 }
 
+/** Shown on a report control once the user has used it. */
+const REPORTED_LABEL = "Reported";
+
+/** Class of the report control attached to a post that was *not* flagged. */
+export const REPORT_CONTROL_CLASS = "aibot-report-fn";
+
+/**
+ * Attach a "Report misinformation" control to a post the extension let through.
+ *
+ * This is the other direction of the feedback loop. The placeholder offers
+ * "Report mistake" for a post that was hidden, but a post that scored below
+ * both thresholds was shown silently and the user had no way to say the
+ * extension missed it. Without this, only false positives could ever be
+ * reported and any dataset built from these reports would be biased towards
+ * "the model over-flags".
+ *
+ * The control is deliberately small and appended to the post rather than
+ * replacing anything: the post itself is untouched and still fully readable.
+ *
+ * Idempotent. reapplyAll re-runs on every settings change, and a second mount
+ * would stack duplicate controls on the post.
+ *
+ * @param {Element} element the post element
+ * @param {string} postKey
+ * @param {{onReport?: () => void, reported?: boolean}} [handlers]
+ * @returns {HTMLElement|null} the control, or null when the element is gone
+ */
+export function mountReportControl(element, postKey, handlers = {}) {
+  if (!element || !element.isConnected || !postKey) return null;
+
+  const existing = element.querySelector(`.${REPORT_CONTROL_CLASS}`);
+  if (existing) return existing;
+
+  const control = document.createElement("div");
+  control.className = REPORT_CONTROL_CLASS;
+  // Keyed by post key so a re-render cannot orphan the listener.
+  control.dataset.postKey = postKey;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "aibot-report-fn-btn";
+  button.textContent = handlers.reported ? REPORTED_LABEL : "Report misinformation";
+  if (handlers.reported) button.disabled = true;
+  control.append(button);
+
+  if (handlers.onReport) {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      handlers.onReport();
+    });
+  }
+
+  element.append(control);
+  return control;
+}
+
 /**
  * Render the stylesheet for placeholders once per document.
  *
@@ -329,6 +386,30 @@ const CSS = `
     transition-duration: 0.01ms !important;
   }
 }
+.aibot-report-fn {
+  display: flex;
+  justify-content: flex-end;
+  margin: 4px 0 0;
+  padding: 4px 2px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.aibot-report-fn button {
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  color: #9aa3af;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 3px 10px;
+  /* Quiet by default: the post is not hidden, so this must not read as an
+     alarm sitting under ordinary content. */
+  opacity: 0.55;
+  transition: opacity 120ms ease-in-out;
+}
+.aibot-report-fn button:hover:not(:disabled),
+.aibot-report-fn button:focus-visible { opacity: 1; border-color: #3b414b; }
+.aibot-report-fn button:disabled { cursor: default; opacity: 0.55; }
 `;
 
 /**

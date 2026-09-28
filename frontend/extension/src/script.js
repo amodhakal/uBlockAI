@@ -10,7 +10,7 @@ import { adapterForUrl, collectPosts, queryWithFallback } from "./adapters/index
 import { LruCache, compactStorageKey, stableCacheKey } from "./lib/cache.js";
 import { coerceCount, recordHide, recordUnhide, restoreCounts } from "./lib/counters.js";
 import { runBounded, withTimeout } from "./lib/concurrency.js";
-import { queueReport } from "./lib/feedback.js";
+import { REPORT_KINDS, queueReport, readReportedKeys } from "./lib/feedback.js";
 import { buildAnalyzePayload } from "./lib/payload.js";
 import { createDebouncedWriter, trimToByteBudget } from "./lib/persistence.js";
 import { isCurrentPost, registerPost, resolvePostElement } from "./lib/dommap.js";
@@ -21,6 +21,7 @@ import {
   installStyles,
   markPost,
   mountPlaceholder,
+  mountReportControl,
 } from "./lib/placeholder.js";
 import { t } from "./lib/i18n.js";
 import {
@@ -76,6 +77,15 @@ const inFlight = new Set();
 const trustedKeys = new Set();
 /** @type {Set<string>} post keys currently hidden */
 const hiddenKeys = new Set();
+/**
+ * @type {Set<string>} `kind:postKey` pairs the user has already reported.
+ *
+ * Kept in memory and seeded from the persisted queues at startup, so a report
+ * survives a reload and the control comes back disabled rather than offering
+ * the same post again. lib/feedback.js also dedupes on write; this is what
+ * keeps the UI honest between writes.
+ */
+const reportedKeys = new Set();
 
 /** Counters are high-churn local state kept in storage.local, not sync. */
 const counterWriter = createDebouncedWriter(
@@ -247,17 +257,13 @@ function hidePost(post, result) {
         videoThumb: post.videoThumb || "",
         fontScale: settings.fontScale,
         action,
+        // Re-mounting a placeholder after a settings change must not offer to
+        // report the same mistake again.
+        reported: reportedKeys.has(`${REPORT_KINDS.FALSE_POSITIVE}:${postKey}`),
       },
       {
         onReveal: () => revealPost(post, postKey),
-        onReport: () => {
-          queueReport({
-            postKey,
-            kind: "falsePositive",
-            imageUrl: post.imageUrl || "",
-            caption: post.caption || "",
-          });
-        },
+        onReport: () => reportPost(post, postKey, REPORT_KINDS.FALSE_POSITIVE),
         hadFocus,
       },
     );
@@ -289,6 +295,38 @@ function markSafe(post, postKey) {
   // this attribute, so a post without it is permanently locked at its
   // original verdict and moving a slider cannot affect it.
   markPost(element, { postKey, state: "safe" });
+  // A post that was let through is still eligible to be reported: the user may
+  // know it is misinformation even though it scored below both thresholds.
+  mountReportControl(element, postKey, {
+    reported: reportedKeys.has(`${REPORT_KINDS.FALSE_NEGATIVE}:${postKey}`),
+    onReport: () => reportPost(post, postKey, REPORT_KINDS.FALSE_NEGATIVE),
+  });
+}
+
+/**
+ * Record a report against a post, from either direction.
+ *
+ * @param {object} post
+ * @param {string} postKey
+ * @param {string} kind one of REPORT_KINDS
+ */
+function reportPost(post, postKey, kind) {
+  const marker = `${kind}:${postKey}`;
+  if (reportedKeys.has(marker)) return;
+  // Marked before the write lands, not after: the button must not be
+  // double-clickable while a storage write is in flight.
+  reportedKeys.add(marker);
+
+  void queueReport({
+    postKey,
+    kind,
+    imageUrl: post.imageUrl || "",
+    caption: post.caption || "",
+  }).then(({ queued }) => {
+    if (queued) return;
+    // Already in the persisted queue: keep the UI consistent with storage.
+    logDebug("feedback", `duplicate ${kind} report ignored`);
+  });
 }
 
 /**
@@ -301,6 +339,7 @@ function revealPost(post, postKey) {
   const original = originalContent.get(postKey);
   if (!element || !original) return;
 
+  // Replacing the children drops anything the report flow appended.
   element.innerHTML = original;
   element.removeAttribute("data-aibot-removed");
   element.setAttribute("data-aibot-temp-visible", "true");
@@ -361,8 +400,15 @@ function rehideRevealed() {
         aiScore: result.aiScore,
         newsScore: result.newsScore,
         action: settings.hidingAction,
+        reported: reportedKeys.has(`${REPORT_KINDS.FALSE_POSITIVE}:${postKey}`),
       },
-      { onReveal: () => revealPost({ element }, postKey) },
+      {
+        onReveal: () => revealPost({ element }, postKey),
+        // Without this the "Report mistake" button on a re-hidden post is
+        // inert: the listener is only attached when a handler is supplied.
+        onReport: () =>
+          reportPost({ imageUrl: "", caption: "" }, postKey, REPORT_KINDS.FALSE_POSITIVE),
+      },
     );
     if (placeholder) element.replaceChildren(placeholder);
     markPost(element, { postKey, state: "hidden" });
@@ -629,6 +675,8 @@ async function start() {
   settings = await loadSettings();
   trustedKeys.clear();
   for (const key of settings.trustedKeys) trustedKeys.add(key);
+
+  for (const marker of await readReportedKeys()) reportedKeys.add(marker);
 
   const stored = await readLocal([STORAGE_KEYS.hiddenCount, STORAGE_KEYS.analyzedCount]);
   const restored = restoreCounts(
