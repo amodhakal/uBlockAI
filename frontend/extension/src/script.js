@@ -36,6 +36,7 @@ import {
 } from "./lib/settings.js";
 
 import { addTrustedKey } from "./lib/trust.js";
+import { prefilterPosts } from "./lib/prefilter.js";
 import {
   STAGES,
   applyStage,
@@ -725,7 +726,26 @@ async function scan() {
 
   // Everything already known, applied without a network call.
   const pending = [];
-  for (const post of posts) {
+
+  // Cheap client-side pre-filter (#66), run before anything enters inFlight or
+  // analysePost. A skipped post is marked processed so the next scan does not
+  // re-evaluate it: the cost of the pre-filter has to be one-time, otherwise
+  // re-running it every scroll costs more than it saves.
+  //
+  // A skipped post is marked SAFE, not "processed with no verdict". That is a
+  // real statement - nothing to check was found - so the post stays visible and
+  // a later threshold change still applies to everything else normally.
+  const { keep, skipped } = prefilterPosts(posts, { trustedKeys });
+  if (skipped.length > 0) {
+    for (const { post, reason } of skipped) {
+      const postKey = stableCacheKey(post);
+      if (!postKey) continue;
+      logDebug("prefilter", `skipped ${reason}`, { postKey });
+      markSafe(post, postKey);
+    }
+  }
+
+  for (const post of keep) {
     const postKey = stableCacheKey(post);
     const cached = resultCache.get(postKey);
     if (cached) {
