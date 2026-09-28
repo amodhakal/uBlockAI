@@ -183,21 +183,33 @@ test("createDebouncedWriter coalesces a burst into one write", async () => {
 
 test("createDebouncedWriter honours maxWaitMs under a continuous stream", async () => {
   const writes = [];
+  // waitMs is far longer than maxWaitMs, so the only thing that can produce a
+  // write during the stream is the max-wait re-arm.
   const writer = createDebouncedWriter(
     (v) => {
       writes.push(v);
       return { ok: true };
     },
+    5000,
     40,
-    60,
   );
 
-  for (let i = 0; i < 6; i += 1) {
+  for (let i = 0; i < 8; i += 1) {
     writer.push(i);
-    await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 15));
   }
+
+  // Count writes before the explicit flush, so the assertion is about the
+  // max-wait path and not about the flush.
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(writes.length >= 1, `maxWaitMs did not fire; got ${writes.length} writes`);
+
   await writer.flush();
-  assert.ok(writes.length >= 2, `expected periodic writes, got ${writes.length}`);
+  assert.equal(
+    writes[writes.length - 1],
+    7,
+    "the latest value must be the one persisted",
+  );
 });
 
 // --------------------------------------------------------------------------
@@ -232,15 +244,14 @@ test("the content script does not cache a failed analysis", () => {
   assert.match(source, /if \(!value\.error\) resultCache\.set\(/);
 });
 
-test("markSafe records the post key", () => {
-  // Without this the element is invisible to reapplyAll and a threshold change
-  // cannot affect it.
+test("markSafe routes through markPost, which records the post key", () => {
+  // The behaviour is covered in dom.test.js. This guards the wiring, so a
+  // future refactor cannot reintroduce a markSafe that skips the key and makes
+  // safe posts invisible to threshold re-evaluation.
   const source = readFileSync(new URL("../script.js", import.meta.url), "utf8");
-  const body = source.slice(
-    source.indexOf("function markSafe"),
-    source.indexOf("function markSafe") + 900,
-  );
-  assert.match(body, /dataset\.postKey\s*=\s*postKey/);
+  const start = source.indexOf("function markSafe");
+  const body = source.slice(start, start + 900);
+  assert.match(body, /markPost\(element, \{ postKey, state: "safe" \}\)/);
 });
 
 test("the original content store is bounded", () => {

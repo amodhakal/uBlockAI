@@ -101,12 +101,17 @@ export function createDebouncedWriter(write, waitMs = 5000, maxWaitMs = 30000) {
       if (firstQueuedAt === null) firstQueuedAt = Date.now();
 
       if (timer !== null) {
-        // A value is already queued. Re-arm only if the oldest queued value is
-        // about to age past maxWaitMs, so a steady stream still gets written.
-        const age = Date.now() - firstQueuedAt;
-        if (age < maxWaitMs) return;
-        clearTimeout(timer);
-        timer = null;
+        // A write is already queued. If the oldest queued value has reached the
+        // max-wait deadline, write it now rather than re-arming: re-arming for
+        // another full wait would mean a steady stream never writes at all,
+        // which is exactly what maxWaitMs exists to prevent.
+        if (Date.now() - firstQueuedAt >= maxWaitMs) {
+          clearTimeout(timer);
+          timer = null;
+          void run();
+          return;
+        }
+        return;
       }
 
       timer = setTimeout(() => {

@@ -11,10 +11,59 @@
  * pass a post key and a result; they never touch innerHTML.
  */
 
-import { escapeHtml, safeUrl } from "./sanitize.js";
+import { safeUrl } from "./sanitize.js";
 import { HIDING_ACTIONS } from "./defaults.js";
 
 const BRAND = "uBlockAI";
+
+/**
+ * The attribute contract between the scanner, this module and the CSS.
+ *
+ * These names were written out in five places across the content script, with
+ * no single owner, so a rename would silently break the post selectors, the
+ * MutationObserver filter and the stylesheet.
+ */
+export const MARK_ATTRS = Object.freeze({
+  PROCESSED: "data-aibot-processed",
+  REMOVED: "data-aibot-removed",
+  SAFE: "data-aibot-safe",
+  TEMP_VISIBLE: "data-aibot-temp-visible",
+  POST_KEY: "data-aibot-post-key",
+});
+
+/**
+ * Stamp the processing markers onto a post element, clearing the states that
+ * are mutually exclusive with the requested one.
+ *
+ * @param {Element} element
+ * @param {{postKey?: string, state: "hidden"|"safe"|"temp-visible"|"none"}} params
+ * @returns {boolean} false when the element is gone
+ */
+export function markPost(element, { postKey, state }) {
+  if (!element || !element.isConnected) return false;
+
+  element.setAttribute(MARK_ATTRS.PROCESSED, "true");
+  if (postKey) {
+    element.setAttribute(MARK_ATTRS.POST_KEY, postKey);
+    element.dataset.postKey = postKey;
+  }
+
+  if (state === "hidden") {
+    element.setAttribute(MARK_ATTRS.REMOVED, "true");
+    element.removeAttribute(MARK_ATTRS.SAFE);
+    element.removeAttribute(MARK_ATTRS.TEMP_VISIBLE);
+  } else if (state === "safe") {
+    element.setAttribute(MARK_ATTRS.SAFE, "true");
+    element.removeAttribute(MARK_ATTRS.REMOVED);
+    element.removeAttribute(MARK_ATTRS.TEMP_VISIBLE);
+  } else if (state === "temp-visible") {
+    element.setAttribute(MARK_ATTRS.TEMP_VISIBLE, "true");
+    element.removeAttribute(MARK_ATTRS.REMOVED);
+    element.removeAttribute(MARK_ATTRS.SAFE);
+  }
+
+  return true;
+}
 
 /**
  * Build the placeholder node for a flagged post.
@@ -25,6 +74,7 @@ const BRAND = "uBlockAI";
  * @param {number} [params.aiScore] 0..1
  * @param {number} [params.newsScore] 0..1
  * @param {string} [params.reason] short reason shown as the heading
+ * @param {string} [params.imageUrl] source image, used by the blur action
  * @param {string} [params.action] one of HIDING_ACTIONS
  * @param {boolean} [params.reported] whether a report was already sent
  * @returns {HTMLElement|null} the placeholder element, or null for 'remove'
@@ -36,6 +86,7 @@ export function buildPlaceholder(params) {
     aiScore = 0,
     newsScore = 0,
     reason = "",
+    imageUrl = "",
     action = HIDING_ACTIONS.PLACEHOLDER,
     reported = false,
   } = params;
@@ -47,7 +98,12 @@ export function buildPlaceholder(params) {
   root.dataset.postKey = postKey;
 
   if (action === HIDING_ACTIONS.BLUR) {
+    // The blur action was inert: the class was added but the placeholder never
+    // contained an image, so there was nothing to blur and it rendered
+    // identically to the placeholder action.
     root.classList.add("aibot-blur");
+    const media = buildBlurredMedia(imageUrl);
+    if (media) root.insertBefore(media, root.firstChild);
   }
 
   const backdrop = document.createElement("div");
@@ -168,6 +224,41 @@ const CSS = `
 .aibot-placeholder.aibot-blur video { filter: blur(28px); }
 `;
 
+/**
+ * Build the placeholder and attach its listeners, in one call.
+ *
+ * Listeners are attached to the node this call just created, so a second mount
+ * cannot double-bind. Handing callers a bare node and letting them wire it is
+ * how the same listener ended up bound twice in the previous design.
+ *
+ * @param {Parameters<typeof buildPlaceholder>[0]} params
+ * @param {{onReveal?: () => void, onReport?: () => void}} [handlers]
+ * @returns {HTMLElement|null} null when the action is "remove"
+ */
+export function mountPlaceholder(params, handlers = {}) {
+  const placeholder = buildPlaceholder(params);
+  if (!placeholder) return null;
+
+  const showButton = placeholder.querySelector(".aibot-show-btn");
+  if (showButton && handlers.onReveal) {
+    showButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      handlers.onReveal();
+    });
+  }
+
+  const reportButton = placeholder.querySelector(".aibot-report-fp");
+  if (reportButton && handlers.onReport) {
+    reportButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      event.preventDefault();
+      handlers.onReport();
+    });
+  }
+
+  return placeholder;
+}
+
 /** Inject the placeholder stylesheet once. Safe to call repeatedly. */
 export function installStyles() {
   if (document.getElementById(STYLE_ID)) return;
@@ -203,5 +294,3 @@ export function buildBlurredMedia(imageUrl) {
 
   return wrapper;
 }
-
-export { escapeHtml };
