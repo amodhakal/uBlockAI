@@ -7,15 +7,18 @@ Synthesis is finished in code, not in the prompt: see
 :func:`apply_credibility_weighting`.
 """
 
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from pydantic import ValidationError
 
 from app.agents.prompts import SYSTEM_PROMPT
+from app.progress import STAGE_SYNTHESIS, stage_for_tool
 from app.schemas.agent_io import AgentOutput, ClaimInput
 from app.tools.credibility_tool import weight_for_tier
 from app.tools.registry import get_langchain_tools
@@ -270,20 +273,20 @@ class LangChainAgent:
     def _get_agent(self) -> Any:
         return self.get_shared_agent(self.model_name)
 
-    async def run(
-        self, inp: ClaimInput, assistant_id: Optional[str] = None
-    ) -> AgentOutput:
-        agent = self._get_agent()
-
+    def _build_input(self, inp: ClaimInput) -> Dict[str, Any]:
         message_payload: Dict[str, Any] = {"claims": inp.claims}
         if inp.context:
             message_payload["context"] = inp.context.model_dump()
+        return {"messages": [("user", json.dumps(message_payload, default=str))]}
 
-        initial_input = {
-            "messages": [("user", json.dumps(message_payload, default=str))]
-        }
+    @staticmethod
+    def _output_from_state(result: Dict[str, Any]) -> AgentOutput:
+        """Turn a finished graph state into a validated AgentOutput.
 
-        result = await agent.ainvoke(initial_input)
+        Shared by `run` and `stream_run` so the streaming path cannot drift
+        from the JSON path: there is one implementation of "what counts as a
+        usable answer", not two.
+        """
         if not isinstance(result, dict):
             raise AgentOutputError(
                 f"Agent returned an unexpected result type: {type(result).__name__}"
@@ -315,3 +318,86 @@ class LangChainAgent:
                 f"Agent output failed schema validation:\n{exc}\n"
                 f"Output:\n{json.dumps(data, indent=2)}"
             ) from exc
+
+    async def run(
+        self, inp: ClaimInput, assistant_id: Optional[str] = None
+    ) -> AgentOutput:
+        agent = self._get_agent()
+        result = await agent.ainvoke(self._build_input(inp))
+        return self._output_from_state(result)
+
+    async def stream_run(
+        self, inp: ClaimInput
+    ) -> AsyncIterator[Tuple[Optional[str], Any]]:
+        """Run the agent, yielding real progress as it happens (#83).
+
+        Yields ``(stage, detail)`` tuples. The final yield is ``(None,
+        AgentOutput)``; every other yield is ``(stage, detail)`` where stage is
+        a value from app.progress and detail is the LangChain tool name for a
+        tool stage, or None otherwise.
+
+        The stages are observed, not scheduled:
+
+        * a tool stage is emitted because the graph's `tools` node actually ran
+          that tool, so a run that never searches never claims to have searched;
+        * `synthesis` is emitted when the agent node produces a message with no
+          tool calls, which is the moment the model commits to an answer
+          instead of asking for another tool.
+
+        This drives the same compiled graph as `run` via `astream`, so there is
+        one agent, one prompt and one set of tools. `astream` is used rather
+        than a hand-rolled callback because the graph is shared process-wide
+        and requests are concurrent; subscribing to a per-request callback on a
+        shared object would cross-contaminate simultaneous requests.
+        """
+        agent = self._get_agent()
+        initial_input = self._build_input(inp)
+
+        last_state: Optional[Dict[str, Any]] = None
+        synthesis_reported = False
+
+        async for mode, chunk in agent.astream(
+            initial_input, stream_mode=["updates", "values"]
+        ):
+            if mode == "values":
+                # Each values chunk is the full state so far. Only the last one
+                # matters, and the structured response is not present on the
+                # earlier ones, so this cannot be resolved early.
+                if isinstance(chunk, dict):
+                    last_state = chunk
+                continue
+
+            if not isinstance(chunk, dict):
+                continue
+
+            for node, update in chunk.items():
+                if not isinstance(update, dict):
+                    continue
+                messages = update.get("messages") or []
+
+                if node == "tools":
+                    for message in messages:
+                        tool_name = getattr(message, "name", None)
+                        stage = stage_for_tool(tool_name)
+                        if stage is not None:
+                            yield stage, tool_name
+                        else:
+                            # A real tool round with no named stage. Yielded
+                            # with a None stage so the caller can log it,
+                            # rather than silently discarded.
+                            yield None, tool_name
+
+                elif node == "agent" and not synthesis_reported:
+                    for message in messages:
+                        if getattr(message, "tool_calls", None):
+                            continue
+                        content = _message_content(message)
+                        if isinstance(content, str) and content.strip():
+                            synthesis_reported = True
+                            yield STAGE_SYNTHESIS, None
+                            break
+
+        if last_state is None:
+            raise AgentOutputError("Agent produced no state to read a result from")
+
+        yield None, self._output_from_state(last_state)

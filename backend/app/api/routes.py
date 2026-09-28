@@ -14,9 +14,11 @@ import asyncio
 import functools
 import os
 import logging
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
+import queue
+import threading
+from typing import Any, Callable, Dict, Iterator, List, Optional, Type, TypeVar
 
-from flask import Blueprint, abort, jsonify, request
+from flask import Blueprint, Response, abort, jsonify, request
 from pydantic import BaseModel, Field, HttpUrl, ValidationError
 from werkzeug.exceptions import HTTPException
 
@@ -33,6 +35,15 @@ from app.image_bytes import (
     decode_inline_images,
 )
 from app.post_classifier import extract_post_text_for_llm
+from app.progress import (
+    STAGE_DECODING,
+    STAGE_DONE,
+    STAGE_OCR,
+    STAGE_RECEIVED,
+    sse_comment,
+    sse_error,
+    sse_event,
+)
 from app.rate_limit import consume_rate_limit, require_rate_limit
 from app.schemas.agent_io import AgentContext, ClaimInput
 from app.url_safety import UnsafeUrlError
@@ -202,6 +213,60 @@ def build_claims(payload: AnalyzeUrlRequest, ocr_text: str) -> List[str]:
     return claims
 
 
+async def extract_post_context(payload: AnalyzeUrlRequest) -> Dict[str, Any]:
+    """Fetch and OCR the post's text. Blocking, so it runs off the event loop.
+
+    Shared by the JSON and streaming endpoints so both build the agent input
+    from the same text. A failure here is not fatal: the agent can still assess
+    a caption-only post, so an empty result is returned and the claim list falls
+    back to the caption.
+    """
+    # Decoding and verification happen before the agent, off the event loop
+    # because Pillow decode is CPU-bound. A rejected image is a client error
+    # and must surface as a 400, so it is deliberately not swallowed here.
+    decoded = await asyncio.to_thread(decode_inline_images, payload.images)
+    try:
+        return await asyncio.to_thread(
+            extract_post_text_for_llm,
+            post_url=payload.url,
+            caption=payload.caption,
+            alt_text=payload.alt_text,
+            max_images=payload.max_images,
+            # Only a video post's poster is a substitute for the scrape. An
+            # image post that happens to send video_thumb does not get it used.
+            # Inline bytes take precedence: the client already holds the pixels,
+            # so there is nothing to fetch at all.
+            poster_url=payload.video_thumb if payload.is_video else "",
+            images=decoded,
+        )
+    except Exception:
+        logger.warning("post text extraction failed", exc_info=True)
+        return {}
+
+
+def build_claim_input(
+    payload: AnalyzeUrlRequest, ocr_res: Dict[str, Any], request_id: str
+) -> ClaimInput:
+    """Assemble the ClaimInput from a validated request and its extracted text."""
+    llm_input_text = (ocr_res or {}).get("llm-input-text", "") or ""
+    # AgentContext.urls is typed HttpUrl, so build it through the model rather
+    # than handing Pydantic a bare list of strings to coerce.
+    context = AgentContext(
+        caption=payload.caption or "",
+        ocr_text=llm_input_text,
+        # The agent scores AI-generated media, and a deepfake Reel and a
+        # doctored still are different problems, so it is told which it is
+        # looking at. Client metadata is preserved rather than replaced.
+        metadata={**(payload.metadata or {}), "is_video": payload.is_video},
+    )
+    context.urls = [HttpUrl(payload.url)]
+    return ClaimInput(
+        claims=build_claims(payload, llm_input_text),
+        context=context,
+        request_id=request_id,
+    )
+
+
 @bp.get("/health")
 async def health():
     """Liveness and readiness probe.
@@ -283,41 +348,9 @@ async def run_analysis(payload: AnalyzeUrlRequest) -> tuple[Dict[str, Any], str]
         )
         return cached, "HIT"
 
-    # Decoding and verification happen before the agent, off the event loop
-    # because Pillow decode is CPU-bound.
-    decoded = await asyncio.to_thread(decode_inline_images, payload.images)
-
-    ocr_res = await asyncio.to_thread(
-        extract_post_text_for_llm,
-        post_url=payload.url,
-        caption=payload.caption,
-        alt_text=payload.alt_text,
-        max_images=payload.max_images,
-        # Only a video post's poster is a substitute for the scrape. An
-        # image post that happens to send video_thumb does not get it used.
-        # Inline bytes take precedence: the client already holds the pixels,
-        # so there is nothing to fetch at all.
-        poster_url=payload.video_thumb if payload.is_video else "",
-        images=decoded,
-    )
-    llm_input_text = ocr_res.get("llm-input-text", "") or ""
-    # The agent scores AI-generated media, and a deepfake Reel and a doctored
-    # still are different problems, so it is told which one it is looking at.
-    # Client metadata is preserved rather than replaced.
-    metadata = {**(payload.metadata or {}), "is_video": payload.is_video}
-    # AgentContext.urls is typed HttpUrl, so build it through the model
-    # rather than handing Pydantic a bare list of strings to coerce.
-    context = AgentContext(
-        caption=payload.caption or "",
-        ocr_text=llm_input_text,
-        metadata=metadata,
-    )
-    context.urls = [HttpUrl(payload.url)]
-    claim_input = ClaimInput(
-        claims=build_claims(payload, llm_input_text),
-        context=context,
-        request_id=request_id,
-    )
+    # The same helpers the streaming endpoint uses, so the two cannot drift.
+    ocr_res = await extract_post_context(payload)
+    claim_input = build_claim_input(payload, ocr_res, request_id)
     result = await agent_runner.run(claim_input)
     logger.info(
         "analysis complete request_id=%s verdict=%s misinfo=%.2f ai=%.2f tool_rounds=%d",
@@ -488,6 +521,151 @@ async def analyze_batch(payload: AnalyzeBatchRequest):
     # overstate what happened.
     response.headers["X-Cache"] = "HIT" if all_cached and results else "MISS"
     return response
+
+
+# --------------------------------------------------------------------------
+# Streaming analysis (#83)
+# --------------------------------------------------------------------------
+
+#: How often a comment frame is sent while nothing is happening, so an
+#: intermediary does not reap a connection that is quiet during a long tool
+#: call. Cheap, and it doubles as a "still alive" signal for the client.
+SSE_KEEPALIVE_SECONDS = 10.0
+
+#: Queue depth for frames produced on the worker thread. Deep enough that the
+#: agent thread never blocks on a slow reader, bounded so a client that stops
+#: reading cannot grow the buffer without limit.
+SSE_QUEUE_SIZE = 64
+
+#: Sentinel pushed to wake the generator when the worker finishes.
+_SENTINEL = object()
+
+
+@bp.post("/analyze_claims/stream")
+@require_api_key
+@require_rate_limit("analyze")
+@json_body(AnalyzeUrlRequest)
+async def analyze_claims_stream(payload: AnalyzeUrlRequest):
+    """Server-Sent Events wrapper over the same analysis pipeline as the JSON endpoint.
+
+    The stages emitted are real, not a timeline. `decoding`/`ocr` bracket the
+    actual post-text extraction, and `searching`/`credibility`/`verifying` are
+    emitted only when the agent graph genuinely invoked that tool. See
+    app/progress.py for the full provenance table.
+
+    Why a worker thread: Flask streams the return value of the view, so the
+    generator is consumed by the WSGI layer outside the request's event loop.
+    Driving an async agent from a synchronous generator is not possible
+    directly, so the coroutine runs on its own thread and hands frames back
+    through a queue. The JSON endpoint above is untouched, so a client that
+    cannot read a stream keeps working exactly as before.
+    """
+    request_id = payload.request_id or "auto"
+    frames: "queue.Queue[Any]" = queue.Queue(maxsize=SSE_QUEUE_SIZE)
+
+    def _worker() -> None:
+        """Run the analysis on a private event loop, pushing SSE frames."""
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(_stream_frames(payload, request_id, frames))
+        except BaseException:  # noqa: BLE001 - the generator reports, never raises
+            logger.exception("streaming analysis failed request_id=%s", request_id)
+            _put(frames, sse_error(GENERIC_INTERNAL_ERROR))
+        finally:
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
+                _put(frames, _SENTINEL)
+
+    thread = threading.Thread(
+        target=_worker, name=f"analyze-stream-{request_id}", daemon=True
+    )
+    thread.start()
+
+    def generate() -> Iterator[str]:
+        """Yield SSE frames as the worker produces them.
+
+        Drains the queue with a timeout rather than blocking forever, so a
+        keepalive comment goes out during a long tool call and a worker that
+        dies without pushing the sentinel still ends the response.
+        """
+        while True:
+            try:
+                frame = frames.get(timeout=SSE_KEEPALIVE_SECONDS)
+            except queue.Empty:
+                yield sse_comment()
+                continue
+            if frame is _SENTINEL:
+                return
+            yield frame
+
+    response = Response(generate(), mimetype="text/event-stream")
+    # Nginx buffers proxied responses by default, which would hold every frame
+    # until the analysis finished and defeat the entire point of the endpoint.
+    response.headers["Cache-Control"] = "no-cache, no-transform"
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Connection"] = "keep-alive"
+    return response
+
+
+def _put(frames: "queue.Queue[Any]", frame: Any) -> None:
+    """Push a frame, dropping it rather than blocking the worker if the client stalled."""
+    try:
+        frames.put_nowait(frame)
+    except queue.Full:
+        logger.warning("stream frame dropped: client is not reading")
+
+
+async def _stream_frames(
+    payload: AnalyzeUrlRequest, request_id: str, frames: "queue.Queue[Any]"
+) -> None:
+    """Emit the real progress of one analysis run as SSE frames."""
+    settings = get_settings()
+    agent_runner = LangChainAgent(api_key=settings.openai_api_key)
+    logger.debug("streaming analysis requested request_id=%s", request_id)
+
+    _put(frames, sse_event(STAGE_RECEIVED))
+
+    _put(frames, sse_event(STAGE_DECODING))
+    ocr_res = await extract_post_context(payload)
+    _put(
+        frames,
+        sse_event(STAGE_OCR, text_chars=len(ocr_res.get("llm-input-text", "") or "")),
+    )
+
+    claim_input = build_claim_input(payload, ocr_res, request_id)
+
+    # `synthesis` is emitted by stream_run itself, at the moment the agent
+    # commits to an answer rather than requesting another tool. Relaying it
+    # from here instead would place it after the run had already finished,
+    # which tells the user nothing.
+    result = None
+    async for stage, detail in agent_runner.stream_run(claim_input):
+        if stage is None and detail is not None and not isinstance(detail, str):
+            result = detail
+            break
+        if stage:
+            _put(frames, sse_event(stage, tool=detail))
+        else:
+            # A real tool round with no named stage. Logged, not rendered:
+            # the client has no label for it and inventing one would be a lie.
+            logger.debug("unnamed agent tool request_id=%s tool=%s", request_id, detail)
+
+    if result is None:
+        logger.error("stream produced no result request_id=%s", request_id)
+        _put(frames, sse_error(GENERIC_INTERNAL_ERROR))
+        return
+
+    logger.info(
+        "streaming analysis complete request_id=%s verdict=%s tool_rounds=%d",
+        request_id,
+        result.verdict.value,
+        result.tool_rounds,
+    )
+    _put(frames, sse_event(STAGE_DONE, result=result.model_dump()))
 
 
 @bp.post("/feedback")
