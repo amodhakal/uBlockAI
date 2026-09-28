@@ -90,6 +90,33 @@
         <p id="error" class="error" role="alert" aria-live="assertive"></p>
       </form>
 
+      <section class="section" aria-labelledby="privacyHeading">
+        <h2 id="privacyHeading">Privacy</h2>
+
+        <div class="field">
+          <div class="field-toggle">
+            <input type="checkbox" id="telemetryEnabled" />
+            <label for="telemetryEnabled">Share anonymous usage counts</label>
+          </div>
+          <p class="field-help" id="telemetryHelp">
+            Off by default. Sends only how many posts were analysed, flagged and reported.
+            Never captions, image URLs, post links or account information &mdash; see the
+            <a href="#" id="telemetryDetails">exact payload</a>.
+          </p>
+          <p class="field-help hidden" id="telemetryUnsupported" role="status"></p>
+        </div>
+
+        <div class="field">
+          <div class="field-toggle">
+            <input type="checkbox" id="debugLogging" />
+            <label for="debugLogging">Log diagnostics to the browser console</label>
+          </div>
+          <p class="field-help">
+            Off by default. Captions, image URLs and API keys are redacted even when on.
+          </p>
+        </div>
+      </section>
+
       <section class="section" aria-labelledby="trustHeading">
         <h2 id="trustHeading">Trusted posts</h2>
         <p class="field-help">

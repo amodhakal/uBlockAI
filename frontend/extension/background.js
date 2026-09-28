@@ -7,7 +7,12 @@
  * a settings change.
  */
 
-import { FEEDBACK_INTERVAL_MINUTES, REQUEST_TIMEOUT_MS } from "./src/lib/defaults.js";
+import {
+  FEEDBACK_INTERVAL_MINUTES,
+  REQUEST_TIMEOUT_MS,
+  STORAGE_KEYS,
+  TELEMETRY_INTERVAL_MINUTES,
+} from "./src/lib/defaults.js";
 import { REPORT_KIND_LIST, bucketFor } from "./src/lib/feedback.js";
 import { logDebug, logError, setDebug } from "./src/lib/logging.js";
 import {
@@ -18,6 +23,12 @@ import {
   readSync,
   writeSync,
 } from "./src/lib/settings.js";
+import {
+  TELEMETRY_PATH,
+  buildTelemetryEvent,
+  hasAnythingToSend,
+  resetPendingCounts,
+} from "./src/lib/telemetry.js";
 
 /**
  * Resolve the backend base URL from storage.
@@ -80,7 +91,12 @@ async function postJson(path, body, options = {}) {
     }
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      throw new Error(`Backend ${response.status}: ${text.slice(0, 200)}`);
+      const error = new Error(`Backend ${response.status}: ${text.slice(0, 200)}`);
+      // The status travels with the error so callers can distinguish "the
+      // server said no" from "the request never arrived", which decide very
+      // different follow-ups.
+      error.status = response.status;
+      throw error;
     }
     return await response.json();
   } catch (error) {
@@ -151,6 +167,76 @@ async function flushOne(kind) {
   logDebug("feedback", `uploaded ${queue.length} ${kind} reports`);
 }
 
+/**
+ * Whether this backend has already been found not to accept telemetry.
+ *
+ * Recorded locally rather than inferred, so the check costs nothing on the
+ * common path and the user is not left with a permanently failing request.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function isTelemetryUnsupported() {
+  const data = await readSync([STORAGE_KEYS.telemetryUnsupported], STORAGE_AREAS.LOCAL);
+  return data[STORAGE_KEYS.telemetryUnsupported] === true;
+}
+
+/**
+ * Upload a batch of aggregate counts.
+ *
+ * Counts only, and only when the user has opted in. The event is built by
+ * lib/telemetry.js, which returns null while telemetry is off, so there is no
+ * network call at all in that case rather than a call that happens to send
+ * nothing.
+ *
+ * A 404 means this backend does not implement the endpoint. That is not a
+ * transient fault, so it is remembered and the batch is not retried on every
+ * alarm: a user who opted in against a self-hosted backend that has not
+ * implemented telemetry would otherwise generate a failed request an hour for
+ * ever. The counters keep accruing locally and the popup keeps showing them.
+ *
+ * @returns {Promise<boolean>} whether a batch was uploaded
+ */
+async function flushTelemetry() {
+  const data = await readSync([
+    STORAGE_KEYS.telemetryEnabled,
+    STORAGE_KEYS.telemetryCounts,
+  ]);
+  if (data[STORAGE_KEYS.telemetryEnabled] !== true) return false;
+  if (await isTelemetryUnsupported()) return false;
+
+  const event = buildTelemetryEvent(true, data[STORAGE_KEYS.telemetryCounts]);
+  // Nothing has happened since the last batch. Uploading a row of zeroes would
+  // tell the backend the extension is installed and doing nothing.
+  if (!hasAnythingToSend(event)) return false;
+
+  const settings = await loadSettings();
+  try {
+    await postJson(TELEMETRY_PATH, event, {
+      baseUrl: settings.backendUrl,
+      apiKey: settings.apiKey,
+      timeoutMs: 20_000,
+    });
+  } catch (error) {
+    if (error?.status === 404) {
+      // Not implemented server-side. Stop trying; keep the counts.
+      await writeSync({ [STORAGE_KEYS.telemetryUnsupported]: true }, STORAGE_AREAS.LOCAL);
+      logError(
+        "telemetry",
+        "backend does not accept telemetry uploads; uploads disabled",
+      );
+      return false;
+    }
+    // Anything else is transient. Counters are left alone so the next alarm
+    // retries the same batch.
+    throw error;
+  }
+
+  // Reset only on success, so a failed batch is retried on the next alarm.
+  await resetPendingCounts();
+  logDebug("telemetry", "uploaded aggregate counts", event.counts);
+  return true;
+}
+
 // The service worker has no settings module loaded at startup, so read the
 // debug flag directly. A service worker is torn down after ~30s idle, so this
 // runs on every wake.
@@ -166,6 +252,13 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 });
 
 chrome.alarms.create("flushFeedback", { periodInMinutes: FEEDBACK_INTERVAL_MINUTES });
+chrome.alarms.create("flushTelemetry", { periodInMinutes: TELEMETRY_INTERVAL_MINUTES });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "flushFeedback") void flushFeedback();
+  if (alarm.name === "flushTelemetry") {
+    // A telemetry failure must not stop the feedback flush or vice versa.
+    void flushTelemetry().catch((error) =>
+      logError("telemetry", "upload deferred", { error: error?.message }),
+    );
+  }
 });

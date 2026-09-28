@@ -80,6 +80,15 @@ export const MAX_HIDDEN_KEYS = 400;
 export const MAX_TRUSTED_KEYS = 400;
 
 /**
+ * How often the service worker uploads an aggregate telemetry batch.
+ *
+ * Separate from the feedback alarm on purpose: a report carries content and is
+ * worth sending promptly, whereas a count is only useful in aggregate and has
+ * no value in being precise about the moment it was taken.
+ */
+export const TELEMETRY_INTERVAL_MINUTES = 60;
+
+/**
  * storage.sync permits 120 writes per minute and 1800 per hour. Writing the
  * whole hidden-key set on every hide saturated that within a session, so writes
  * are coalesced.
@@ -170,6 +179,8 @@ export const STORAGE_KEYS = Object.freeze({
   hidingAction: "hidingAction",
   trustedKeys: "trustedKeys",
   telemetryEnabled: "telemetryEnabled",
+  telemetryCounts: "telemetryCounts",
+  telemetryUnsupported: "telemetryUnsupported",
   analyzedCount: "analyzedCount",
   falsePositiveReports: "falsePositiveReports",
   falseNegativeReports: "falseNegativeReports",

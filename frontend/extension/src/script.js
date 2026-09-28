@@ -16,6 +16,7 @@ import { createDebouncedWriter, trimToByteBudget } from "./lib/persistence.js";
 import { isCurrentPost, registerPost, resolvePostElement } from "./lib/dommap.js";
 import { logDebug, logError, setDebug } from "./lib/logging.js";
 import { clearFailure, recordFailure, shouldSkip } from "./lib/retry.js";
+import { TELEMETRY_METRICS, recordCounts } from "./lib/telemetry.js";
 import {
   announce,
   installStyles,
@@ -282,7 +283,10 @@ function hidePost(post, result) {
   // re-renders, so the DOM-present count is a different quantity.
   const transition = recordHide(hiddenKeys, totalHiddenCount, postKey);
   totalHiddenCount = transition.lifetime;
-  if (transition.added) queueHiddenKeyWrite();
+  if (transition.added) {
+    queueHiddenKeyWrite();
+    void recordCounts({ [TELEMETRY_METRICS.HIDDEN]: 1 });
+  }
 }
 
 /**
@@ -323,7 +327,11 @@ function reportPost(post, postKey, kind) {
     imageUrl: post.imageUrl || "",
     caption: post.caption || "",
   }).then(({ queued }) => {
-    if (queued) return;
+    if (queued) {
+      // A count, not the report. Nothing about the post leaves the device here.
+      void recordCounts({ [TELEMETRY_METRICS.REPORTED]: 1 });
+      return;
+    }
     // Already in the persisted queue: keep the UI consistent with storage.
     logDebug("feedback", `duplicate ${kind} report ignored`);
   });
@@ -539,6 +547,7 @@ async function scan() {
     [STORAGE_KEYS.analyzedCount]: totalAnalyzedCount,
     [STORAGE_KEYS.hiddenCount]: totalHiddenCount,
   });
+  void recordCounts({ [TELEMETRY_METRICS.ANALYZED]: pending.length });
 
   pending.forEach((post, index) => {
     const postKey = stableCacheKey(post);

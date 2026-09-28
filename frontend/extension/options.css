@@ -144,6 +144,36 @@ a:focus-visible {
   line-height: 1.5;
 }
 
+.field-help code {
+  font-size: 11px;
+  background: var(--panel);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* Conditional help text, e.g. the "backend does not accept counts" notice. */
+.field-help:empty {
+  display: none;
+}
+
+.field-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-toggle label {
+  font-size: 13px;
+}
+
+/* Checkboxes share the global `input` rule, which is sized for text fields. */
+input[type="checkbox"] {
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .actions {
   display: flex;
   gap: 10px;

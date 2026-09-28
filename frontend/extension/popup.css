@@ -92,15 +92,16 @@ h1 {
 
 .stats {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 16px;
 }
 
 .stat {
   flex: 1;
+  min-width: 0;
   background: var(--panel);
   border-radius: 8px;
-  padding: 10px;
+  padding: 10px 6px;
   text-align: center;
 }
 
@@ -144,6 +145,11 @@ h1 {
   font-size: calc(11px * var(--aibot-font-scale));
   line-height: 1.45;
   margin-top: 4px;
+  line-height: 1.5;
+}
+
+.field-help a {
+  color: var(--accent);
 }
 
 input[type="range"] {

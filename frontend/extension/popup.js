@@ -22,6 +22,12 @@ import {
   readLocal,
   writeSync,
 } from "./src/lib/settings.js";
+import { REPORT_KIND_LIST, bucketFor } from "./src/lib/feedback.js";
+import {
+  TELEMETRY_METRICS,
+  buildTelemetryEvent,
+  resetPendingCounts,
+} from "./src/lib/telemetry.js";
 
 const BRAND = "uBlockAI";
 
@@ -54,8 +60,11 @@ const els = {
   fontScaleSelect: document.getElementById("fontScale"),
   hiddenCount: document.getElementById("hiddenCount"),
   analyzedCount: document.getElementById("analyzedCount"),
+  reportedCount: document.getElementById("reportedCount"),
   optionsLink: document.getElementById("optionsLink"),
   debugLogging: document.getElementById("debugLogging"),
+  telemetryEnabled: document.getElementById("telemetryEnabled"),
+  telemetryDetails: document.getElementById("telemetryDetails"),
 };
 
 /**
@@ -106,6 +115,17 @@ async function refreshStats() {
   els.analyzedCount.textContent = String(
     Number(data[STORAGE_KEYS.analyzedCount] ?? 0) || 0,
   );
+
+  // Posts the user reported, in either direction. The queues are pruned on
+  // upload and on age, so this is "reports still pending", which is the
+  // honest reading of it and the only one available.
+  const queues = await readLocal(REPORT_KIND_LIST.map(bucketFor));
+  els.reportedCount.textContent = String(
+    REPORT_KIND_LIST.reduce((total, kind) => {
+      const queue = queues[bucketFor(kind)];
+      return total + (Array.isArray(queue) ? queue.length : 0);
+    }, 0),
+  );
 }
 
 async function init() {
@@ -148,6 +168,20 @@ async function init() {
   els.newsSlider.value = String(toSlider(settings.newsThreshold));
   els.newsValue.textContent = els.newsSlider.value;
   els.debugLogging.checked = settings.debugLogging;
+  els.telemetryEnabled.checked = settings.telemetryEnabled;
+
+  // "What is sent" shows the payload shape, built by the same module that
+  // builds the real one, so the description cannot drift from the behaviour.
+  els.telemetryDetails.addEventListener("click", (event) => {
+    event.preventDefault();
+    const example = buildTelemetryEvent(true, { [TELEMETRY_METRICS.ANALYZED]: 12 });
+    window.alert(
+      "When enabled, the extension periodically sends counts like:\n\n" +
+        `${JSON.stringify(example, null, 2)}\n\n` +
+        "Nothing else. No captions, image URLs, post links, or account " +
+        "information, and no timestamps for individual posts.",
+    );
+  });
 
   els.aiSlider.addEventListener("input", (event) => {
     const sliderValue = Number(event.target.value);
@@ -179,6 +213,17 @@ async function init() {
     void writeSync({ [STORAGE_KEYS.debugLogging]: event.target.checked });
   });
 
+  els.telemetryEnabled.addEventListener("change", (event) => {
+    const enabled = event.target.checked;
+    void writeSync({ [STORAGE_KEYS.telemetryEnabled]: enabled }).then(async () => {
+      // Turning it off drops anything already queued. The counts stay on the
+      // device as local statistics, but there is no longer a pending batch, so
+      // switching the flag back on cannot resurrect and upload an older total
+      // the user did not expect to send.
+      if (!enabled) await resetPendingCounts();
+    });
+  });
+
   els.optionsLink.addEventListener("click", (event) => {
     event.preventDefault();
     chrome.runtime.openOptionsPage();
@@ -188,8 +233,12 @@ async function init() {
 
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace !== "local") return;
-    if (changes[STORAGE_KEYS.hiddenCount]) refreshStats();
-    if (changes[STORAGE_KEYS.analyzedCount]) refreshStats();
+    const watched = [
+      STORAGE_KEYS.hiddenCount,
+      STORAGE_KEYS.analyzedCount,
+      ...REPORT_KIND_LIST.map(bucketFor),
+    ];
+    if (watched.some((key) => key in changes)) refreshStats();
   });
 }
 
