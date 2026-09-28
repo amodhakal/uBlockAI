@@ -21,8 +21,10 @@ from pydantic import BaseModel, Field, HttpUrl, ValidationError
 from werkzeug.exceptions import HTTPException
 
 from app.agents.langchain_agent import AgentOutputError, LangChainAgent
+from app.auth import require_api_key
 from app.config import get_settings
 from app.feedback_store import append_reports
+from app.rate_limit import require_rate_limit
 from app.post_classifier import extract_post_text_for_llm
 from app.schemas.agent_io import AgentContext, ClaimInput
 
@@ -179,6 +181,8 @@ async def health():
 
 
 @bp.post("/analyze_claims")
+@require_api_key
+@require_rate_limit("analyze")
 @json_body(AnalyzeUrlRequest)
 async def analyze_claims(payload: AnalyzeUrlRequest):
     settings = get_settings()
@@ -239,6 +243,8 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
 
 
 @bp.post("/feedback")
+@require_api_key
+@require_rate_limit("feedback")
 @json_body(FeedbackRequest)
 async def submit_feedback(payload: FeedbackRequest):
     """Receive false-positive/negative reports from the extension for later analysis."""

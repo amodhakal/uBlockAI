@@ -15,6 +15,9 @@ beautifulsoup4==4.12.3
 flask[async]==3.1.3
 # 4.0.0 is affected by CVE-2024-6221 (log injection). 6.x is the patched line.
 flask-cors==6.0.5
+# gunicorn is driven by gunicorn.conf.py. The default sync worker handles one
+# request at a time per process, so a single slow analysis blocks every other
+# request behind it, and the default 30s timeout kills requests mid-flight.
 gunicorn==23.0.0
 httpx==0.28.1
 langchain==1.4.2

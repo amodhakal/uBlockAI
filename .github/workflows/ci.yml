@@ -172,4 +172,10 @@ jobs:
           body = response.get_json()
           assert body["status"] == "ok", body
           print("health:", body)
+
+          # /api/health is exempt from auth; the analysis endpoint is not.
+          # Assert that too, so a regression cannot quietly reopen it.
+          denied = client.post("/api/analyze_claims", json={"url": "https://x/y.jpg"})
+          assert denied.status_code == 401, denied.get_data(as_text=True)
+          print("auth guard: analysis endpoint returns 401 without a key")
           PY

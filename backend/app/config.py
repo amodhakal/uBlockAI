@@ -12,7 +12,7 @@ Every tunable the backend needs is resolved here once, at call time, so that:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -77,7 +77,12 @@ class Settings:
     default_ocr_profile: str
     max_images: int
     feedback_dir: Path
-    allowed_origins: tuple[str, ...] = field(default=())
+    allowed_origins: tuple[str, ...] = ()
+    api_keys_path: Path | None = None
+    require_auth: bool = True
+    analyze_rate_limit: int = 20
+    feedback_rate_limit: int = 60
+    rate_window_seconds: int = 60
 
     def require_api_key(self) -> str:
         if not self.openai_api_key:
@@ -111,6 +116,15 @@ def get_settings() -> Settings:
         max_images=_read_int("MAX_IMAGES", DEFAULT_MAX_IMAGES),
         feedback_dir=APP_DIR / "feedback",
         allowed_origins=allowed_origins,
+        api_keys_path=(
+            Path(os.environ["API_KEYS_PATH"]) if os.getenv("API_KEYS_PATH") else None
+        ),
+        # Fail closed: an unauthenticated analysis endpoint is a billing
+        # incident. Operators can disable auth explicitly for local work.
+        require_auth=_read_bool("REQUIRE_AUTH", True),
+        analyze_rate_limit=_read_int("ANALYZE_RATE_LIMIT", 20, minimum=1),
+        feedback_rate_limit=_read_int("FEEDBACK_RATE_LIMIT", 60, minimum=1),
+        rate_window_seconds=_read_int("RATE_WINDOW_SECONDS", 60, minimum=1),
     )
 
 
