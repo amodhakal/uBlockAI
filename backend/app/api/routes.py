@@ -12,6 +12,7 @@ instead of Flask's default HTML error page.
 
 import asyncio
 import functools
+import os
 import logging
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
@@ -142,6 +143,39 @@ def build_claims(payload: AnalyzeUrlRequest, ocr_text: str) -> List[str]:
         claims = ["[no extractable text in this post]"]
 
     return claims
+
+
+@bp.get("/health")
+async def health():
+    """Liveness and readiness probe.
+
+    Reports whether configuration resolved, so a container orchestrator can
+    distinguish "process is up" from "process is up but misconfigured". It never
+    echoes a key or any other secret: the API key is reported as a boolean.
+    """
+    settings = get_settings()
+    checks = {
+        "api_key_configured": bool(settings.openai_api_key),
+        "search_provider_configured": bool(settings.brave_api_key),
+        "feedback_dir_writable": os.access(settings.feedback_dir, os.W_OK)
+        if settings.feedback_dir.exists()
+        else os.access(settings.feedback_dir.parent, os.W_OK),
+    }
+
+    # A missing API key is a configuration fault, not a crash: the process is
+    # alive but cannot serve analysis requests.
+    healthy = checks["api_key_configured"]
+    return (
+        jsonify(
+            {
+                "status": "ok" if healthy else "degraded",
+                "version": "1.0.0",
+                "model": settings.openai_model,
+                "checks": checks,
+            }
+        ),
+        200 if healthy else 503,
+    )
 
 
 @bp.post("/analyze_claims")
