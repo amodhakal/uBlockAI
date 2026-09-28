@@ -29,15 +29,14 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.instagram.com/*"],
+      "matches": ["https://www.instagram.com/*", "https://instagram.com/*"],
       "js": ["src/script.js"],
       "run_at": "document_idle"
     }
   ],
-  "web_accessible_resources": [
-    {
-      "resources": ["crime-scene.png"],
-      "matches": ["https://www.instagram.com/*"]
-    }
-  ]
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
 }
