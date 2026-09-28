@@ -12,7 +12,8 @@ import { runBounded, withTimeout } from "./lib/concurrency.js";
 import { queueReport } from "./lib/feedback.js";
 import { buildAnalyzePayload } from "./lib/payload.js";
 import { createDebouncedWriter, trimToByteBudget } from "./lib/persistence.js";
-import { buildPlaceholder, installStyles } from "./lib/placeholder.js";
+import { isCurrentPost, registerPost, resolvePostElement } from "./lib/dommap.js";
+import { installStyles, markPost, mountPlaceholder } from "./lib/placeholder.js";
 import {
   STORAGE_AREAS,
   loadSettings,
@@ -194,12 +195,17 @@ function applyResult(post, result) {
  * @param {object} result
  */
 function hidePost(post, result) {
-  const { element } = post;
-  if (!element || !element.isConnected) return;
-  if (element.querySelector(".aibot-placeholder")) return;
-
   const postKey = result.postKey;
   if (!postKey) return;
+
+  // Re-resolve by stable key rather than trusting the reference captured when
+  // the analysis started. A virtualised feed reuses connected nodes, so the
+  // captured element may now be a different post entirely; hiding that one
+  // would be worse than hiding nothing.
+  const element =
+    resolvePostElement(postKey) || (post.element?.isConnected ? post.element : null);
+  if (!element || !isCurrentPost(element, postKey)) return;
+  if (element.querySelector(".aibot-placeholder")) return;
 
   if (!originalContent.has(postKey)) {
     originalContent.set(postKey, element.innerHTML);
@@ -213,22 +219,31 @@ function hidePost(post, result) {
   if (action === HIDING_ACTIONS.REMOVE) {
     element.remove();
   } else {
-    const placeholder = buildPlaceholder({
-      postKey,
-      explanation: result.explanation,
-      aiScore: result.aiScore,
-      newsScore: result.newsScore,
-      action,
-    });
-    if (placeholder) {
-      element.replaceChildren(placeholder);
-      attachListeners(placeholder, post, result);
-    }
+    const placeholder = mountPlaceholder(
+      {
+        postKey,
+        explanation: result.explanation,
+        aiScore: result.aiScore,
+        newsScore: result.newsScore,
+        imageUrl: post.imageUrl || "",
+        action,
+      },
+      {
+        onReveal: () => revealPost(post, postKey),
+        onReport: () => {
+          queueReport({
+            postKey,
+            kind: "falsePositive",
+            imageUrl: post.imageUrl || "",
+            caption: post.caption || "",
+          });
+        },
+      },
+    );
+    if (placeholder) element.replaceChildren(placeholder);
   }
 
-  element.setAttribute("data-aibot-processed", "true");
-  element.setAttribute("data-aibot-removed", "true");
-  element.dataset.postKey = postKey;
+  markPost(element, { postKey, state: "hidden" });
 
   if (!hiddenKeys.has(postKey)) {
     hiddenKeys.add(postKey);
@@ -238,50 +253,15 @@ function hidePost(post, result) {
 }
 
 /**
- * @param {HTMLElement} placeholder
- * @param {object} post
- * @param {object} result
- */
-function attachListeners(placeholder, post, result) {
-  const showButton = placeholder.querySelector(".aibot-show-btn");
-  if (showButton) {
-    // Listeners are attached programmatically. Inline onmouseover/onmouseout
-    // attributes are blocked by the page's Content Security Policy, so the
-    // hover styling never applied.
-    showButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      revealPost(post, result.postKey);
-    });
-  }
-
-  const reportButton = placeholder.querySelector(".aibot-report-fp");
-  if (reportButton) {
-    reportButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      event.preventDefault();
-      queueReport({
-        postKey: result.postKey,
-        kind: "falsePositive",
-        imageUrl: post.imageUrl || "",
-        caption: post.caption || "",
-      });
-      reportButton.textContent = "Reported";
-      reportButton.disabled = true;
-    });
-  }
-}
-
-/**
  * @param {object} post
  */
 function markSafe(post, postKey) {
-  if (!post.element?.isConnected) return;
-  post.element.setAttribute("data-aibot-processed", "true");
-  post.element.setAttribute("data-aibot-safe", "true");
+  const element = resolvePostElement(postKey) || post.element;
+  if (!element) return;
   // The key must be recorded on safe posts too. reapplyAll resolves posts by
   // this attribute, so a post without it is permanently locked at its
   // original verdict and moving a slider cannot affect it.
-  if (postKey) post.element.dataset.postKey = postKey;
+  markPost(element, { postKey, state: "safe" });
 }
 
 /**
@@ -322,6 +302,7 @@ function rehideRevealed() {
 
     const result = resultCache.get(postKey);
     if (!result) continue;
+    if (!isCurrentPost(element, postKey)) continue;
 
     // Respect the thresholds the user is actually running. This used to
     // re-hide unconditionally.
@@ -337,19 +318,18 @@ function rehideRevealed() {
       continue;
     }
 
-    const placeholder = buildPlaceholder({
-      postKey,
-      explanation: result.explanation,
-      aiScore: result.aiScore,
-      newsScore: result.newsScore,
-      action: settings.hidingAction,
-    });
-    if (placeholder) {
-      element.replaceChildren(placeholder);
-      attachListeners(placeholder, { element, imageUrl: null, caption: "" }, result);
-    }
-    element.setAttribute("data-aibot-removed", "true");
-    element.removeAttribute("data-aibot-temp-visible");
+    const placeholder = mountPlaceholder(
+      {
+        postKey,
+        explanation: result.explanation,
+        aiScore: result.aiScore,
+        newsScore: result.newsScore,
+        action: settings.hidingAction,
+      },
+      { onReveal: () => revealPost({ element }, postKey) },
+    );
+    if (placeholder) element.replaceChildren(placeholder);
+    markPost(element, { postKey, state: "hidden" });
   }
 }
 
@@ -368,6 +348,10 @@ function reapplyAll() {
   for (const element of document.querySelectorAll("[data-aibot-processed]")) {
     const postKey = element.dataset.postKey;
     if (!postKey) continue;
+    // Re-verify against the authoritative binding. dataset is page-controlled:
+    // a content script's isolated world shares the DOM, so any attribute can
+    // be forged by the page and must not be trusted on its own.
+    if (!isCurrentPost(element, postKey)) continue;
     const result = resultCache.get(postKey);
     if (!result) continue;
 
@@ -435,6 +419,10 @@ async function scan() {
       continue;
     }
     if (inFlight.has(postKey)) continue;
+    // Bind the key to the element now, before any async work. The binding is
+    // what lets us prove at mutation time that the element still holds this
+    // post rather than a recycled one.
+    registerPost(post.element, postKey);
     inFlight.add(postKey);
     pending.push(post);
   }
