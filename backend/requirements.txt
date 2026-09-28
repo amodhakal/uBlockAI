@@ -6,7 +6,10 @@
 #   pip install -r requirements.txt && pip freeze > requirements.lock
 
 beautifulsoup4==4.12.3
-flask==3.0.0
+# The [async] extra is required: the API views are `async def`, and plain
+# flask raises "Install Flask with the 'async' extra" at dispatch time,
+# turning every request into a 500.
+flask[async]==3.1.2
 # 4.0.0 is affected by CVE-2024-6221 (log injection). 5.0.1 is the patched line.
 flask-cors==5.0.1
 gunicorn==23.0.0
