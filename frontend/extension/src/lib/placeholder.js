@@ -27,7 +27,8 @@
  */
 
 import { safeUrl } from "./sanitize.js";
-import { HIDING_ACTIONS, FONT_SCALE_CSS_VARIABLE, fontScaleFactor } from "./defaults.js";
+import { buildExplanationDetails } from "./explanation.js";
+import { FONT_SCALE_CSS_VARIABLE, HIDING_ACTIONS, fontScaleFactor } from "./defaults.js";
 import { focusFirstIn, onEscape } from "./focus.js";
 import { t } from "./i18n.js";
 
@@ -139,6 +140,14 @@ export function announce(message, doc) {
  * @param {string} [params.action] one of HIDING_ACTIONS
  * @param {boolean} [params.reported] whether a report was already sent
  * @param {string} [params.fontScale] a FONT_SCALES value
+ * @param {string} [params.verdict] backend Verdict enum value
+ * @param {number} [params.confidence] 0..1
+ * @param {string[]|string} [params.reasoning_chain] step-by-step reasoning
+ * @param {string[]|string} [params.reasoningChain] camelCase alias
+ * @param {object[]} [params.evidence] evidence items (see explanation.js)
+ * @param {string[]|string} [params.uncertainties] unverifiable points
+ * @param {object[]} [params.claim_scores] per-claim scores (#86)
+ * @param {object[]} [params.claimScores] camelCase alias
  * @returns {HTMLElement|null} the placeholder element, or null for 'remove'
  */
 export function buildPlaceholder(params) {
@@ -154,6 +163,14 @@ export function buildPlaceholder(params) {
     action = HIDING_ACTIONS.PLACEHOLDER,
     reported = false,
     fontScale,
+    verdict = "",
+    confidence = null,
+    reasoning_chain: reasoningSnake = [],
+    reasoningChain: reasoningCamel = [],
+    evidence = [],
+    uncertainties = [],
+    claim_scores: claimScoresSnake = [],
+    claimScores: claimScoresCamel = [],
   } = params;
 
   if (action === HIDING_ACTIONS.REMOVE) return null;
@@ -218,6 +235,32 @@ export function buildPlaceholder(params) {
   news.textContent = t("placeholderScoreNews", [String(Math.round(newsScore * 100))]);
   scores.append(ai, news);
   panel.append(scores);
+
+  // Explanation detail view (#79): expandable reasoning / evidence /
+  // uncertainties. Built via textContent + safeUrl only, so model output can
+  // never become markup. Omitted when the backend supplied nothing beyond the
+  // summary explanation.
+  const reasoning_chain =
+    Array.isArray(reasoningSnake) && reasoningSnake.length > 0
+      ? reasoningSnake
+      : reasoningCamel;
+  const details = buildExplanationDetails({
+    verdict,
+    confidence,
+    explanation,
+    reasoning_chain,
+    evidence,
+    uncertainties,
+    // Claim-level scores (#86). Empty unless the backend started returning
+    // them; the detail view omits the section entirely in that case.
+    claim_scores:
+      Array.isArray(claimScoresSnake) && claimScoresSnake.length > 0
+        ? claimScoresSnake
+        : claimScoresCamel,
+    aiScore,
+    newsScore,
+  });
+  if (details) panel.append(details);
 
   const actions = document.createElement("div");
   actions.className = "aibot-actions";
@@ -351,6 +394,21 @@ const CSS = `
   font-size: calc(12px * var(--aibot-font-scale)); color: #9aa3af; margin-bottom: 12px; flex-wrap: wrap;
 }
 .aibot-placeholder .aibot-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.aibot-placeholder .aibot-details { margin: 4px 0 12px; text-align: left; font-size: 13px; }
+.aibot-placeholder .aibot-details-toggle { cursor: pointer; color: #4dabf7; font-weight: 600; font-size: 13px; }
+.aibot-placeholder .aibot-details-body { margin-top: 8px; color: #cbd2dc; }
+.aibot-placeholder .aibot-verdict { font-size: 13px; font-weight: 600; margin: 0 0 8px; color: #e6e8ec; }
+.aibot-placeholder .aibot-details-heading { font-size: 13px; font-weight: 650; margin: 10px 0 4px; color: #e6e8ec; }
+.aibot-placeholder .aibot-reasoning, .aibot-placeholder .aibot-evidence, .aibot-placeholder .aibot-uncertainties { margin: 0 0 8px 18px; padding: 0; line-height: 1.45; }
+.aibot-placeholder .aibot-evidence-item { margin-bottom: 4px; overflow-wrap: anywhere; }
+.aibot-placeholder .aibot-evidence-item a { color: #4dabf7; }
+.aibot-placeholder .aibot-evidence-meta { color: #9aa3af; }
+.aibot-placeholder .aibot-evidence-summary { color: #9aa3af; }
+.aibot-placeholder .aibot-claims-list { margin: 0 0 8px 18px; padding: 0; line-height: 1.45; }
+.aibot-placeholder .aibot-claim-item { margin-bottom: 5px; overflow-wrap: anywhere; }
+.aibot-placeholder .aibot-claim-item a { color: #4dabf7; }
+.aibot-placeholder .aibot-claim-score { color: #e6e8ec; font-weight: 600; }
+.aibot-placeholder .aibot-claims-note { margin: 0 0 6px; color: #9aa3af; font-size: 12px; }
 .aibot-placeholder button {
   font: inherit; font-size: calc(13px * var(--aibot-font-scale)); font-weight: 600; cursor: pointer;
   border-radius: 999px; min-height: 24px; padding: 8px 16px; border: 1px solid #3b414b;

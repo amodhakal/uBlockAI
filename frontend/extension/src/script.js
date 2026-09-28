@@ -143,6 +143,26 @@ function sendMessage(message) {
 }
 
 /**
+ * Read the optional per-claim score array off a backend response.
+ *
+ * A spread of `[result.claim_scores, result.claims]` guards against `null`
+ * winning a `??` chain: an explicit `"claim_scores": null` with a populated
+ * `claims` would otherwise null out the fallback. Entries are kept as opaque
+ * objects and shaped by claim-scores.js, so a schema addition there needs no
+ * change here.
+ *
+ * @param {object} result
+ * @returns {object[]}
+ */
+function normalizeClaimArray(result) {
+  for (const key of ["claim_scores", "claims"]) {
+    const value = result?.[key];
+    if (Array.isArray(value)) return value.slice(0, 10);
+  }
+  return [];
+}
+
+/**
  * Analyse one post, with a hard timeout and a conservative fallback.
  * @param {object} post
  * @returns {Promise<object>} a result record; never rejects
@@ -168,12 +188,32 @@ async function analysePost(post) {
     // Scores are cached, not the hide decision. Caching the decision meant a
     // slider change had no effect on posts already in the cache: the entry
     // still said shouldHide true or false, so re-filtering was impossible.
+    // The verdict, reasoning chain, evidence and uncertainties are passed
+    // through untouched for the explanation detail view (#79); they are
+    // display-only and never influence the hide decision.
     return {
       postKey,
       aiScore,
       newsScore,
       explanation: String(result?.explanation || ""),
       verdict: result?.verdict || null,
+      confidence:
+        result?.confidence === null || result?.confidence === undefined
+          ? null
+          : Number(result.confidence),
+      reasoning_chain: Array.isArray(result?.reasoning_chain)
+        ? result.reasoning_chain.map(String).slice(0, 20)
+        : [],
+      evidence: Array.isArray(result?.evidence) ? result.evidence.slice(0, 20) : [],
+      uncertainties: Array.isArray(result?.uncertainties)
+        ? result.uncertainties.map(String).slice(0, 20)
+        : [],
+      tool_rounds: Number(result?.tool_rounds ?? 0) || 0,
+      // Claim-level scores (#86). AgentOutput has no per-claim field today, so
+      // this is normally an empty array and the detail view omits the section.
+      // It is carried through rather than dropped so the UI lights up the
+      // moment the backend starts returning it, with no extension change.
+      claim_scores: normalizeClaimArray(result),
       error: false,
     };
   } catch (error) {
@@ -253,6 +293,12 @@ function hidePost(post, result) {
         explanation: result.explanation,
         aiScore: result.aiScore,
         newsScore: result.newsScore,
+        verdict: result.verdict || "",
+        confidence: result.confidence ?? null,
+        reasoning_chain: result.reasoning_chain || [],
+        evidence: result.evidence || [],
+        uncertainties: result.uncertainties || [],
+        claim_scores: result.claim_scores || [],
         imageUrl: post.imageUrl || "",
         videoUrl: post.videoUrl || "",
         videoThumb: post.videoThumb || "",
@@ -407,6 +453,12 @@ function rehideRevealed() {
         explanation: result.explanation,
         aiScore: result.aiScore,
         newsScore: result.newsScore,
+        verdict: result.verdict || "",
+        confidence: result.confidence ?? null,
+        reasoning_chain: result.reasoning_chain || [],
+        evidence: result.evidence || [],
+        uncertainties: result.uncertainties || [],
+        claim_scores: result.claim_scores || [],
         action: settings.hidingAction,
         reported: reportedKeys.has(`${REPORT_KINDS.FALSE_POSITIVE}:${postKey}`),
       },
