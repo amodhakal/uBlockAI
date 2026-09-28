@@ -89,6 +89,22 @@
         <p id="status" class="status" role="status" aria-live="polite"></p>
         <p id="error" class="error" role="alert" aria-live="assertive"></p>
       </form>
+
+      <section class="section" aria-labelledby="trustHeading">
+        <h2 id="trustHeading">Trusted posts</h2>
+        <p class="field-help">
+          Posts you chose to show anyway. They stay visible until you remove them here,
+          even after the extension restarts.
+        </p>
+
+        <p id="trustEmpty" class="empty">No posts are trusted yet.</p>
+        <ul id="trustList" class="trust-list"></ul>
+
+        <div class="actions">
+          <button type="button" id="clearTrusted" class="quiet">Trust nothing</button>
+        </div>
+        <p id="trustStatus" class="status" role="status" aria-live="polite"></p>
+      </section>
     </main>
 
     <script type="module" src="options.js"></script>

@@ -403,9 +403,16 @@ function reapplyAll() {
       settings.newsThreshold,
     );
 
-    if (shouldHide && !hiddenKeys.has(postKey)) {
-      hidePost({ element, imageUrl: null, caption: "" }, result);
-    } else if (!shouldHide && hiddenKeys.has(postKey)) {
+    if (shouldHide) {
+      // Membership of hiddenKeys is not a reliable "is this post currently
+      // hidden" test: a post the user revealed with "Show post anyway" stays in
+      // the set, so testing it here meant removing a post from the options-page
+      // trust list did nothing until the next reload. What is on screen is the
+      // thing to look at instead.
+      if (!element.querySelector(".aibot-placeholder")) {
+        hidePost({ element, imageUrl: null, caption: "" }, result);
+      }
+    } else if (hiddenKeys.has(postKey)) {
       const transition = recordUnhide(hiddenKeys, totalHiddenCount, postKey);
       totalHiddenCount = transition.lifetime;
       const original = originalContent.get(postKey);

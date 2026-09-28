@@ -1,5 +1,5 @@
 /**
- * Options page: self-hosting and credentials.
+ * Options page: self-hosting, credentials and trust settings.
  *
  * The backend URL was a hardcoded constant in the service worker, repeated in
  * the manifest, with no way to point the extension at a self-hosted deployment
@@ -17,6 +17,12 @@ import {
   writeLocal,
   writeSync,
 } from "./src/lib/settings.js";
+import {
+  clearTrustedKeys,
+  describeTrustedKey,
+  normalizeTrustedKeys,
+  removeTrustedKey,
+} from "./src/lib/trust.js";
 
 /** Message name for each text-size option. */
 const FONT_SCALE_LABEL_KEYS = {
@@ -36,6 +42,10 @@ const els = {
   test: document.getElementById("testConnection"),
   status: document.getElementById("status"),
   error: document.getElementById("error"),
+  trustList: document.getElementById("trustList"),
+  trustEmpty: document.getElementById("trustEmpty"),
+  trustStatus: document.getElementById("trustStatus"),
+  clearTrusted: document.getElementById("clearTrusted"),
 };
 
 function setStatus(message, tone = "ok") {
@@ -197,6 +207,86 @@ async function init() {
   els.reset.addEventListener("click", onReset);
   els.test.addEventListener("click", onTestConnection);
   els.fontScale.addEventListener("change", onFontScaleChange);
+  await renderTrusted();
+  els.clearTrusted.addEventListener("click", onClearTrusted);
+}
+
+// --------------------------------------------------------------------------
+// Trust settings
+// --------------------------------------------------------------------------
+
+function setTrustStatus(message) {
+  els.trustStatus.textContent = message;
+}
+
+/**
+ * Replace the trust list with one row per trusted post.
+ *
+ * Every node is built with createElement and filled with textContent. The keys
+ * are derived from CDN URLs on posts the user chose to trust, so they are
+ * attacker-influenced: an innerHTML template here would be an injection point
+ * in a page that can already reach the extension's storage.
+ */
+async function renderTrusted() {
+  const settings = await loadSettings();
+  const keys = normalizeTrustedKeys(settings.trustedKeys);
+
+  els.trustList.replaceChildren();
+  for (const key of keys) {
+    const row = document.createElement("li");
+
+    const label = document.createElement("span");
+    label.className = "trust-key";
+    // Short, recognisable form; the full key stays available on hover.
+    label.textContent = describeTrustedKey(key);
+    label.title = key;
+    row.append(label);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Stop trusting ${describeTrustedKey(key)}`);
+    remove.addEventListener("click", () => {
+      void onRemoveTrusted(key);
+    });
+    row.append(remove);
+
+    els.trustList.append(row);
+  }
+
+  els.trustEmpty.textContent = keys.length === 0 ? "No posts are trusted yet." : "";
+  els.clearTrusted.disabled = keys.length === 0;
+}
+
+async function onRemoveTrusted(key) {
+  const { keys, removed } = removeTrustedKey(
+    normalizeTrustedKeys((await loadSettings()).trustedKeys),
+    key,
+  );
+  if (!removed) return;
+
+  const result = await writeSync({ [STORAGE_KEYS.trustedKeys]: keys });
+  if (!result.ok) {
+    setTrustStatus(`Could not update the trust list: ${result.error}`);
+    return;
+  }
+  await renderTrusted();
+  setTrustStatus("Removed. The post will be hidden again if it trips a threshold.");
+}
+
+async function onClearTrusted() {
+  const { keys, removed } = clearTrustedKeys(
+    normalizeTrustedKeys((await loadSettings()).trustedKeys),
+  );
+  if (removed === 0) return;
+
+  const result = await writeSync({ [STORAGE_KEYS.trustedKeys]: keys });
+  if (!result.ok) {
+    setTrustStatus(`Could not update the trust list: ${result.error}`);
+    return;
+  }
+  await renderTrusted();
+  setTrustStatus(`Cleared ${removed} trusted ${removed === 1 ? "post" : "posts"}.`);
 }
 
 void init();
