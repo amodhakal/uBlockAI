@@ -23,6 +23,7 @@ import {
  * @property {string} backendUrl
  * @property {string} apiKey
  * @property {boolean} telemetryEnabled
+ * @property {boolean} debugLogging
  * @property {string[]} trustedKeys
  */
 
@@ -164,6 +165,7 @@ export async function loadSettings() {
     STORAGE_KEYS.backendUrl,
     STORAGE_KEYS.telemetryEnabled,
     STORAGE_KEYS.trustedKeys,
+    STORAGE_KEYS.debugLogging,
   ]);
   // The API key is read from local storage, never sync: Chrome sync is not
   // end-to-end encrypted, so a bearer token there would be uploaded to the
@@ -185,6 +187,7 @@ export async function loadSettings() {
     apiKey:
       typeof local[STORAGE_KEYS.apiKey] === "string" ? local[STORAGE_KEYS.apiKey] : "",
     telemetryEnabled: data[STORAGE_KEYS.telemetryEnabled] === true,
+    debugLogging: data[STORAGE_KEYS.debugLogging] === true,
     trustedKeys: Array.isArray(data[STORAGE_KEYS.trustedKeys])
       ? data[STORAGE_KEYS.trustedKeys]
       : [],

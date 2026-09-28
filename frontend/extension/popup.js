@@ -38,6 +38,7 @@ const els = {
   hiddenCount: document.getElementById("hiddenCount"),
   analyzedCount: document.getElementById("analyzedCount"),
   optionsLink: document.getElementById("optionsLink"),
+  debugLogging: document.getElementById("debugLogging"),
 };
 
 function showError(message) {
@@ -98,6 +99,7 @@ async function init() {
   els.newsSlider.value = String(toSlider(settings.newsThreshold));
   els.newsValue.textContent = els.newsSlider.value;
   els.actionSelect.value = settings.hidingAction;
+  els.debugLogging.checked = settings.debugLogging;
 
   els.aiSlider.addEventListener("input", (event) => {
     const sliderValue = Number(event.target.value);
@@ -115,6 +117,10 @@ async function init() {
 
   els.actionSelect.addEventListener("change", (event) => {
     void writeSync({ [STORAGE_KEYS.hidingAction]: event.target.value });
+  });
+
+  els.debugLogging.addEventListener("change", (event) => {
+    void writeSync({ [STORAGE_KEYS.debugLogging]: event.target.checked });
   });
 
   els.optionsLink.addEventListener("click", (event) => {

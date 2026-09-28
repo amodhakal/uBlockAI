@@ -41,8 +41,26 @@ export const BATCH_TIMEOUT_MS = 90_000;
 /** Wait after a scroll before reprocessing, in milliseconds. */
 export const SCROLL_DEBOUNCE_MS = 200;
 
+/**
+ * How often the service worker drains the feedback queue.
+ *
+ * chrome.alarms persists across worker restarts, unlike setTimeout, which is
+ * why the worker uses it rather than an interval. 15 minutes is comfortably
+ * above every documented floor; do not lower it to speed up a test, assert on
+ * the constant instead.
+ */
+export const FEEDBACK_INTERVAL_MINUTES = 15;
+
 /** Maximum number of analysis requests in flight at once. */
 export const MAX_CONCURRENT_REQUESTS = 4;
+
+/**
+ * A failed analysis is not cached, so it would be retried on every scan. A
+ * backend outage would then become a request storm that keeps it down. Retries
+ * are paced and capped.
+ */
+export const RETRY_BASE_MS = 5000;
+export const MAX_ANALYSIS_ATTEMPTS = 3;
 
 /** Maximum entries retained in the in-memory result cache. */
 export const MAX_CACHE_ENTRIES = 500;
@@ -94,6 +112,7 @@ export const STORAGE_KEYS = Object.freeze({
   removedPostKeys: "removedPostKeys",
   backendUrl: "backendUrl",
   apiKey: "apiKey",
+  debugLogging: "debugLogging",
   hidingAction: "hidingAction",
   trustedKeys: "trustedKeys",
   telemetryEnabled: "telemetryEnabled",
