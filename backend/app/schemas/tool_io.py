@@ -3,37 +3,40 @@ from typing import Annotated, Any, Dict, List, Optional
 from pydantic import BaseModel, Field, HttpUrl, conint, confloat
 
 class WebSearchInput(BaseModel):
-    query: str = Field(..., min_length=1)
-    top_k: Annotated[float, Field(ge=1.0, le=10.0)] = Field(default=5)
+    claim_text: str = Field(..., min_length=1)
+    # top_k is a count, not a float. It was typed as a bounded float, which
+    # accepted and silently rounded values like 2.7.
+    top_k: Annotated[int, Field(ge=1, le=10)] = 5
+    prior_queries: List[str] = Field(default_factory=list)
 
 class WebSearchResult(BaseModel):
-    title:Optional[str] = None
+    title: Optional[str] = None
     url: HttpUrl
-    snipped: Optional[str] = None
+    # Was misspelled "snipped", so the snippet never round-tripped.
+    snippet: Optional[str] = None
 
 class WebSearchOutput(BaseModel):
-    query: str
-    results: List[WebSearchResult] = Field(default_factory=list)
-
-class FetchExtractInput(BaseModel):
-    url:HttpUrl
-
-class FetchExtractOutput(BaseModel):
-    url: HttpUrl
-    title: Optional[str] = None
-    clean_text: str = Field(..., min_length=1, description="Cleaned text extracted content")
+    claim_text: str
+    queries: List[str] = Field(default_factory=list)
+    selected: List[WebSearchResult] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
+    # True when the search provider rate-limited us. Distinct from "no results":
+    # callers must not treat a 429 as evidence that nothing exists.
+    rate_limited: bool = False
 
 class CredibilityItem(BaseModel):
     url: HttpUrl
-    domain:str
+    domain: str
     tier: str = Field(..., description="high|medium|low")
     rationale: Optional[str] = None
+    signals: List[str] = Field(default_factory=list)
 
 class CredibilityOutput(BaseModel):
     items: List[CredibilityItem] = Field(default_factory=list)
 
 class NumericVerifyInput(BaseModel):
-    claim_text: str= Field(..., min_length=1)
+    claim_text: str = Field(..., min_length=1)
+    expected_result: Optional[float] = None
 
 class NumericFinding(BaseModel):
     extracted_numbers: List[str] = Field(default_factory=list, description="Raw numeric strings found")

@@ -1,70 +1,50 @@
+"""Tool registry.
+
+The JSON tool definitions below are generated from the LangChain ``@tool``
+objects themselves. Previously the descriptions and parameter schemas were
+hand-copied here, guaranteeing they would drift from the docstrings the model
+actually sees. Deriving them means there is exactly one definition per tool.
+"""
+
 from typing import Any, Dict, List
-from langchain_core.tools import tool
+
 from app.tools.web_search_tool import web_search_llm
 from app.tools.credibility_tool import credibility_llm
 from app.tools.numeric_verify import numeric_verify
 
-
-def get_tool_definitions() -> List[Dict[str, Any]]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": "web_search_llm",
-                "description": "LLM-assisted web search: generates queries to search on web, retrieves results, selects best evidence candidates from snippets.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "claim_text": {"type": "string"},
-                        "top_k": {"type": "integer", "minimum": 1, "maximum": 10},
-                        "prior_queries": {"type": "array", "items": {"type": "string"}},
-                    },
-                    "required": ["claim_text"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "credibility_llm",
-                "description": "LLM-based credibility tiering for sources using url/title/snippet.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "sources": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "url": {"type": "string"},
-                                    "title": {"type": "string"},
-                                    "snippet": {"type": "string"},
-                                },
-                                "required": ["url"],
-                            },
-                        }
-                    },
-                    "required": ["sources"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "numeric_verify",
-                "description": "Verify numeric claims by checking if calculations are correct.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "claim_text": {"type": "string"},
-                        "expected_result": {"type": "number"},
-                    },
-                    "required": ["claim_text"],
-                },
-            },
-        },
-    ]
+_LANGCHAIN_TOOLS = [web_search_llm, credibility_llm, numeric_verify]
 
 
 def get_langchain_tools() -> List:
-    return [web_search_llm, credibility_llm, numeric_verify]
+    """Return the LangChain tool objects bound to the ReAct agent."""
+    return list(_LANGCHAIN_TOOLS)
+
+
+def _tool_to_function_def(lc_tool) -> Dict[str, Any]:
+    """Convert a LangChain tool into an OpenAI-style function definition."""
+    args_schema = getattr(lc_tool, "args_schema", None)
+    parameters: Dict[str, Any]
+    if args_schema is not None and hasattr(args_schema, "model_json_schema"):
+        schema = args_schema.model_json_schema()
+        parameters = {
+            "type": "object",
+            "properties": schema.get("properties", {}),
+        }
+        if schema.get("required"):
+            parameters["required"] = schema["required"]
+    else:
+        parameters = {"type": "object", "properties": {}}
+
+    return {
+        "type": "function",
+        "function": {
+            "name": lc_tool.name,
+            "description": (lc_tool.description or "").strip(),
+            "parameters": parameters,
+        },
+    }
+
+
+def get_tool_definitions() -> List[Dict[str, Any]]:
+    """Return OpenAI-style function definitions, derived from the tools."""
+    return [_tool_to_function_def(t) for t in _LANGCHAIN_TOOLS]
