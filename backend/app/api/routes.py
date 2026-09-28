@@ -11,11 +11,8 @@ instead of Flask's default HTML error page.
 """
 
 import asyncio
-import datetime
 import functools
-import json
 import logging
-import os
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from flask import Blueprint, abort, jsonify, request
@@ -24,6 +21,7 @@ from werkzeug.exceptions import HTTPException
 
 from app.agents.langchain_agent import AgentOutputError, LangChainAgent
 from app.config import get_settings
+from app.feedback_store import append_reports
 from app.post_classifier import extract_post_text_for_llm
 from app.schemas.agent_io import ClaimInput
 
@@ -192,24 +190,13 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
 async def submit_feedback(payload: FeedbackRequest):
     """Receive false-positive/negative reports from the extension for later analysis."""
     try:
-        feedback_dir = str(get_settings().feedback_dir)
-        os.makedirs(feedback_dir, exist_ok=True)
-        filename = datetime.datetime.now().strftime("%Y-%m-%d.json")
-        filepath = os.path.join(feedback_dir, filename)
-
-        existing: List[Dict[str, Any]] = []
-        if os.path.exists(filepath):
-            with open(filepath, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-
-        for report in payload.reports:
-            existing.append(report.model_dump())
-
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(existing, f, indent=2)
-
+        total = await asyncio.to_thread(
+            append_reports,
+            get_settings().feedback_dir,
+            [report.model_dump() for report in payload.reports],
+        )
         return jsonify(
-            {"received": len(payload.reports), "total_stored": len(existing)}
+            {"received": len(payload.reports), "total_stored": total}
         )
     except ValidationError as exc:
         logger.warning("feedback validation error: %s", exc)
