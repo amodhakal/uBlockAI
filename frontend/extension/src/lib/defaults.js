@@ -196,6 +196,14 @@ export const STORAGE_KEYS = Object.freeze({
   falsePositiveReports: "falsePositiveReports",
   falseNegativeReports: "falseNegativeReports",
   fontScale: "fontScale",
+  /**
+   * Offline mode (#88).
+   *
+   * Opt-in and off by default. When it is on the content script classifies on
+   * device and never contacts the backend, which is a real privacy and cost
+   * change, so it cannot be something the extension decides for the user.
+   */
+  offlineMode: "offlineMode",
 });
 
 /**

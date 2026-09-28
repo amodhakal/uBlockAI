@@ -152,6 +152,25 @@ h1 {
   color: var(--accent);
 }
 
+/* Which on-device classifier is actually running. Sized like the help text but
+   boxed, because it is a status rather than an instruction and has to be
+   findable at a glance: the difference between "a transformer" and "a keyword
+   counter" is the difference between a claim and a guess. */
+.field-status {
+  color: var(--muted);
+  font-size: calc(11px * var(--aibot-font-scale));
+  line-height: 1.5;
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+}
+
+.field-status span:first-child {
+  color: var(--text);
+  font-weight: 600;
+}
+
 input[type="range"] {
   width: 100%;
   height: calc(6px * var(--aibot-font-scale));

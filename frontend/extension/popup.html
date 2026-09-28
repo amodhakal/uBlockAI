@@ -118,6 +118,30 @@
             <div class="field-toggle">
               <input
                 type="checkbox"
+                id="offlineMode"
+                aria-describedby="offlineHelp modelStatus"
+              />
+              <label for="offlineMode" data-i18n="popupOfflineLabel"
+                >Classify on this device</label
+              >
+            </div>
+            <p class="field-help" id="offlineHelp" data-i18n="popupOfflineHelp">
+              Off by default. Posts are scored by a small model running in this browser
+              and are never sent to the analysis service. It is much less accurate than a
+              full analysis, and the warning over a hidden post says so.
+            </p>
+            <p class="field-status" id="modelStatus" role="status" aria-live="polite">
+              <span data-i18n="popupModelLabel">On-device model</span>:
+              <span id="modelStatusValue" data-i18n="popupModelStatusHeuristicOnly"
+                >Unavailable, so the built-in word-pattern scorer is being used.</span
+              >
+            </p>
+          </div>
+
+          <div class="field">
+            <div class="field-toggle">
+              <input
+                type="checkbox"
                 id="telemetryEnabled"
                 aria-describedby="telemetryHelp"
               />
