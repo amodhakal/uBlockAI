@@ -150,6 +150,14 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
     settings = get_settings()
     agent_runner = LangChainAgent(api_key=settings.openai_api_key)
     request_id = payload.request_id or "auto"
+    logger.debug(
+        "analysis requested request_id=%s url=%s caption_chars=%d alt_text_chars=%d max_images=%d",
+        request_id,
+        payload.url,
+        len(payload.caption or ""),
+        len(payload.alt_text or ""),
+        payload.max_images,
+    )
     try:
         ocr_res = await asyncio.to_thread(
             extract_post_text_for_llm,
@@ -170,6 +178,14 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
             request_id=request_id,
         )
         result = await agent_runner.run(claim_input)
+        logger.info(
+            "analysis complete request_id=%s verdict=%s misinfo=%.2f ai=%.2f tool_rounds=%d",
+            request_id,
+            result.verdict.value,
+            result.misinformation_risk_score,
+            result.ai_generated_risk_score,
+            result.tool_rounds,
+        )
         return jsonify(result.model_dump())
     except ValidationError as exc:
         logger.warning("analysis validation error request_id=%s: %s", request_id, exc)

@@ -1,4 +1,3 @@
-import logging
 import os
 
 from dotenv import load_dotenv
@@ -6,17 +5,18 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from pydantic import ValidationError
 from werkzeug.exceptions import BadRequest, HTTPException
+
 from app.api.routes import bp as api_bp
 from app.config import get_settings
+from app.logging_config import configure_logging
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(base_dir, '.env')
 load_dotenv(env_path)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+# Debug is opt-in via DEBUG=true. Privacy-sensitive payload content is
+# redacted by the logging filter regardless of level.
+configure_logging()
 
 app = Flask(__name__)
 
@@ -30,7 +30,6 @@ CORS(
 )
 
 app.register_blueprint(api_bp, url_prefix="/api")
-
 
 @app.errorhandler(BadRequest)
 def handle_bad_request(exc: BadRequest):
