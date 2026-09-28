@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.logging_config import configure_logging
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
-env_path = os.path.join(base_dir, '.env')
+env_path = os.path.join(base_dir, ".env")
 load_dotenv(env_path)
 
 # Debug is opt-in via DEBUG=true. Privacy-sensitive payload content is
@@ -30,6 +30,7 @@ CORS(
 )
 
 app.register_blueprint(api_bp, url_prefix="/api")
+
 
 @app.errorhandler(BadRequest)
 def handle_bad_request(exc: BadRequest):

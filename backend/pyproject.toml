@@ -1,0 +1,63 @@
+# Ruff: fast linting and import sorting.
+# Run: ruff check . && ruff format --check .
+
+target-version = "py310"
+line-length = 100
+src = ["app"]
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+    "RET",  # return simplification
+    "ARG",  # unused arguments
+    "C4",   # comprehensions
+    "PTH",  # prefer pathlib
+    "RUF",
+]
+ignore = [
+    # Blueprint registration and Flask app wiring read as calls, not paths.
+    "E501",
+    # Tests assert on exception messages.
+    "B011",
+]
+
+[lint.per-file-ignores]
+"app/tests/*" = ["ARG", "S101"]
+
+[lint.isort]
+known-first-party = ["app"]
+
+[format]
+quote-style = "double"
+
+[mypy]
+python_version = "3.10"
+files = ["app"]
+# Third-party stubs for langchain and langgraph are incomplete, so untyped
+# boundaries are allowed through rather than being silenced one by one. Our own
+# modules are still fully checked.
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "app.tests.*"
+disallow_untyped_defs = false
+
+# These ship no type information at all and have no stubs available.
+[[tool.mypy.overrides]]
+module = ["pytesseract.*", "flask_cors.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
