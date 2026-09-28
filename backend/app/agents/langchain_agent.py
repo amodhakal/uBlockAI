@@ -10,20 +10,35 @@ from app.tools.web_search_tool import web_search_llm
 from app.tools.credibility_tool import credibility_llm
 
 
-llm = ChatOpenAI(model="gpt-5-main", temperature=0)
-
-
 class LangChainAgent:
-    def __init__(self, api_key: str = "", model_name: str = "gpt-5-main"):
+    """LangChain ReAct agent wrapper.
+
+    The underlying compiled graph is built lazily on first use, so importing
+    this module never constructs an OpenAI client.
+    """
+
+    def __init__(self, api_key: str = "", model_name: str | None = None):
         self.model_name = model_name
-        self._llm = ChatOpenAI(model=model_name, temperature=0)
+        self._api_key = api_key
+        self._llm: ChatOpenAI | None = None
         self._agent = None
+
+    def _get_llm(self) -> ChatOpenAI:
+        if self._llm is None:
+            from app.llm import get_chat_model
+
+            self._llm = get_chat_model(
+                model=self.model_name,
+                api_key=self._api_key or None,
+                timeout=90.0,
+            )
+        return self._llm
 
     def _get_agent(self):
         if self._agent is None:
             tools = get_langchain_tools()
             self._agent = create_react_agent(
-                model=self._llm, tools=tools, state_modifier=SYSTEM_PROMPT
+                model=self._get_llm(), tools=tools, state_modifier=SYSTEM_PROMPT
             )
         return self._agent
 

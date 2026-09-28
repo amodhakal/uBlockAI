@@ -4,14 +4,18 @@ from typing import Any, Dict, List, Optional
 import os
 import httpx
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
+
 from app.agents.prompts import WEB_SEARCH_TOOL_PROMPT
 
 
 _DDG_URL = "https://duckduckgo.com/html/"
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Agent/1.0"
 
-llm = ChatOpenAI(model="gpt-5-main", temperature=0)
+
+def _get_llm():
+    from app.llm import get_chat_model
+
+    return get_chat_model(timeout=60.0)
 
 
 def ddg_search(query: str, top_k: int = 5):
@@ -103,7 +107,7 @@ async def _llm_plan_selection(
         },
     ]
 
-    response = await llm.ainvoke(messages)
+    response = await _get_llm().ainvoke(messages)
     content = response.content
 
     try:
