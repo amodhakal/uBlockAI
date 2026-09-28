@@ -1,22 +1,26 @@
 {
   "manifest_version": 3,
   "version": "1.0.0",
-  "name": "AIBot",
-  "description": "Your new AI Bot",
-  "permissions": ["activeTab", "scripting", "storage", "tabs", "alarms"],
+  "name": "uBlockAI",
+  "short_name": "uBlockAI",
+  "description": "Blocks AI-generated misinformation in social media feeds.",
+  "permissions": ["storage", "alarms"],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-  "host_permissions": ["https://www.instagram.com/*", "https://hack-ncstate-2026.onrender.com/*"],
+  "host_permissions": [
+    "https://hack-ncstate-2026.onrender.com/*",
+    "https://www.instagram.com/*"
+  ],
   "action": {
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_title": "uBlockAI"
   },
-  "icons": {},
   "content_scripts": [
     {
       "matches": ["https://www.instagram.com/*"],
-      "js": ["script.js"],
+      "js": ["src/script.js"],
       "run_at": "document_idle"
     }
   ],

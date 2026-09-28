@@ -52,3 +52,5 @@ backend/app/.env
 *.pt
 *.pth
 *.onnx_data
+node_modules/
+frontend/extension/node_modules/
