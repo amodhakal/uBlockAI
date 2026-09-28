@@ -13,6 +13,8 @@ import { queueReport } from "./lib/feedback.js";
 import { buildAnalyzePayload } from "./lib/payload.js";
 import { createDebouncedWriter, trimToByteBudget } from "./lib/persistence.js";
 import { isCurrentPost, registerPost, resolvePostElement } from "./lib/dommap.js";
+import { logDebug, logError, setDebug } from "./lib/logging.js";
+import { clearFailure, recordFailure, shouldSkip } from "./lib/retry.js";
 import { installStyles, markPost, mountPlaceholder } from "./lib/placeholder.js";
 import {
   STORAGE_AREAS,
@@ -86,6 +88,8 @@ let totalHiddenCount = 0;
 let totalAnalyzedCount = 0;
 /** @type {Set<string>} compact digests of posts hidden in a previous session */
 let hiddenDigests = new Set();
+/** @type {Record<string, {attempts: number, nextAt: number}>} retry backoff */
+let retryState = {};
 let scrollTimer = null;
 let scanScheduled = false;
 
@@ -156,7 +160,7 @@ async function analysePost(post) {
   } catch (error) {
     // Never hide on failure. Hiding a legitimate post because the backend was
     // unreachable is worse than showing misinformation once.
-    console.warn(`[${BRAND}] analysis failed for ${postKey}: ${error.message}`);
+    logError("analyze", "request failed", { postKey, error: error.message });
     return { postKey, aiScore: 0, newsScore: 0, explanation: "", error: true };
   }
 }
@@ -392,6 +396,9 @@ async function scan() {
     const postKey = stableCacheKey(post);
     if (!postKey) return false;
     if (trustedKeys.has(postKey)) return false;
+    // A failed analysis is not cached, so without backoff it would be retried
+    // on every scan and a backend outage becomes a request storm.
+    if (shouldSkip(retryState, postKey)) return false;
     return !post.element.hasAttribute("data-aibot-processed");
   });
 
@@ -458,7 +465,15 @@ async function scan() {
       // the post permanently un-analysable, which is the bug the timeout was
       // added to prevent: every later scan would hit the cached failure and
       // never retry.
-      if (!value.error) resultCache.set(postKey, value);
+      if (value.error) {
+        const { state, attempts, giveUp } = recordFailure(retryState, postKey);
+        retryState = state;
+        if (giveUp)
+          logDebug("analyze", `giving up on ${postKey} after ${attempts} attempts`);
+      } else {
+        retryState = clearFailure(retryState, postKey);
+        resultCache.set(postKey, value);
+      }
       applyResult(post, value);
     }
   });
@@ -491,10 +506,7 @@ function queueHiddenKeyWrite() {
   const compact = bounded.map(compactStorageKey);
   const { values, dropped } = trimToByteBudget(compact);
   if (dropped > 0) {
-    console.warn(
-      `[${BRAND}] ${dropped} hidden-post keys exceed the storage budget and ` +
-        "will be forgotten on reload",
-    );
+    logError("persist", "hidden-post keys exceed the storage budget", { dropped });
   }
   hiddenKeyWriter.push(values);
 }
@@ -503,7 +515,7 @@ function queueHiddenKeyWrite() {
 async function persistTrustedKeys() {
   const result = await writeSync({ [STORAGE_KEYS.trustedKeys]: Array.from(trustedKeys) });
   if (!result.ok) {
-    console.warn(`[${BRAND}] could not persist trusted keys: ${result.error}`);
+    logError("persist", "could not persist trusted keys", { error: result.error });
   }
 }
 
@@ -565,6 +577,7 @@ window.addEventListener("scroll", () => {
 // write cycle.
 onSettingsChanged((next) => {
   settings = next;
+  setDebug(next.debugLogging === true);
   trustedKeys.clear();
   for (const key of next.trustedKeys) trustedKeys.add(key);
   reapplyAll();
@@ -579,6 +592,7 @@ async function start() {
   totalHiddenCount = Number(counters[STORAGE_KEYS.hiddenCount] ?? 0) || 0;
   totalAnalyzedCount = Number(counters[STORAGE_KEYS.analyzedCount] ?? 0) || 0;
 
+  setDebug(settings.debugLogging === true);
   hiddenDigests = await loadHiddenDigests();
   observe();
   await scan();

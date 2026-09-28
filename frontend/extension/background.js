@@ -7,15 +7,17 @@
  * a settings change.
  */
 
-import { REQUEST_TIMEOUT_MS } from "./src/lib/defaults.js";
+import { FEEDBACK_INTERVAL_MINUTES, REQUEST_TIMEOUT_MS } from "./src/lib/defaults.js";
+import { REPORT_KINDS } from "./src/lib/feedback.js";
+import { logDebug, logError, setDebug } from "./src/lib/logging.js";
 import {
   DEFAULT_BACKEND_URL,
+  STORAGE_AREAS,
   loadSettings,
   normalizeBackendUrl,
-  writeLocal,
+  readSync,
+  writeSync,
 } from "./src/lib/settings.js";
-
-const BRAND = "uBlockAI";
 
 /**
  * Resolve the backend base URL from storage.
@@ -101,28 +103,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg?.type === "UPLOAD_REPORTS") {
-    const reports = Array.isArray(msg.reports) ? msg.reports : [];
-    if (reports.length === 0) {
-      sendResponse({ ok: true, result: { uploaded: 0 } });
-      return true;
-    }
-    postJson("/api/feedback", { reports }, 20_000)
-      .then((result) => sendResponse({ ok: true, result }))
-      .catch((error) =>
-        sendResponse({ ok: false, error: String(error?.message || error) }),
-      );
-    return true;
-  }
-
   return false;
 });
 
-/** Periodically drain the local feedback queue. */
+/**
+ * Periodically drain the local feedback queues.
+ *
+ * Uploads are driven by the alarm below rather than by a message, so the
+ * UPLOAD_REPORTS message type that nothing ever sent has been removed.
+ */
 async function flushFeedback() {
-  try {
-    const data = await chrome.storage.local.get(["falsePositiveReports"]);
-    const queue = data.falsePositiveReports;
+  for (const kind of REPORT_KINDS) {
+    try {
+      await flushOne(kind);
+    } catch (error) {
+      // Keep the queue for the next attempt rather than dropping user reports.
+      logError("feedback", `upload deferred for ${kind}`, { error: error?.message });
+    }
+  }
+}
+
+async function flushOne(kind) {
+  {
+    const data = await readSync([kind], STORAGE_AREAS.LOCAL);
+    const queue = data[kind];
     if (!Array.isArray(queue) || queue.length === 0) return;
 
     const settings = await loadSettings();
@@ -139,14 +143,27 @@ async function flushFeedback() {
       },
       { baseUrl: settings.backendUrl, apiKey: settings.apiKey, timeoutMs: 20_000 },
     );
-    await writeLocal({ falsePositiveReports: [] });
-  } catch (error) {
-    // Keep the queue for the next attempt rather than dropping user reports.
-    console.warn(`[${BRAND}] feedback upload deferred: ${error?.message || error}`);
+    // Cleared only on success, so a failed upload retries next time.
+    await writeSync({ [kind]: [] }, STORAGE_AREAS.LOCAL);
+    logDebug("feedback", `uploaded ${queue.length} ${kind} reports`);
   }
 }
 
-chrome.alarms?.create("flushFeedback", { periodInMinutes: 15 });
-chrome.alarms?.onAlarm.addListener((alarm) => {
+// The service worker has no settings module loaded at startup, so read the
+// debug flag directly. A service worker is torn down after ~30s idle, so this
+// runs on every wake.
+chrome.storage.sync
+  .get(["debugLogging"])
+  .then((data) => setDebug(data?.debugLogging === true))
+  .catch(() => {});
+
+chrome.storage.onChanged.addListener((changes, namespace) => {
+  if (namespace === "sync" && changes.debugLogging) {
+    setDebug(changes.debugLogging.newValue === true);
+  }
+});
+
+chrome.alarms.create("flushFeedback", { periodInMinutes: FEEDBACK_INTERVAL_MINUTES });
+chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "flushFeedback") void flushFeedback();
 });

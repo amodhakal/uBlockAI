@@ -241,7 +241,10 @@ test("the content script does not cache a failed analysis", () => {
   // A cached failure record makes a post permanently un-analysable, which is
   // the bug the request timeout was added to prevent.
   const source = readFileSync(new URL("../script.js", import.meta.url), "utf8");
-  assert.match(source, /if \(!value\.error\) resultCache\.set\(/);
+  assert.match(source, /if \(value\.error\) \{[\s\S]{0,400}?recordFailure/);
+  // The only cache write must be on the success branch.
+  const writes = source.match(/resultCache\.set\(/g) || [];
+  assert.equal(writes.length, 1, "resultCache.set should appear exactly once");
 });
 
 test("markSafe routes through markPost, which records the post key", () => {

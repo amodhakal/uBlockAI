@@ -169,6 +169,16 @@ select {
   border: 1px solid #2f353e;
 }
 
+.field-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-toggle label {
+  font-size: 13px;
+}
+
 .footer {
   margin-top: 4px;
   font-size: 12px;

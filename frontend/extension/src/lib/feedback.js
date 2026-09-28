@@ -8,7 +8,8 @@
  */
 
 import { STORAGE_KEYS } from "./defaults.js";
-import { readSync, writeSync } from "./settings.js";
+import { logError } from "./logging.js";
+import { STORAGE_AREAS, readSync, writeSync } from "./settings.js";
 
 const KIND_FALSE_POSITIVE = "falsePositiveReports";
 const KIND_FALSE_NEGATIVE = "falseNegativeReports";
@@ -22,7 +23,7 @@ const MAX_QUEUED_REPORTS = 200;
  * @returns {Promise<object[]>}
  */
 async function readQueue(kind) {
-  const data = await readSync([kind]);
+  const data = await readSync([kind], STORAGE_AREAS.LOCAL);
   const raw = data[kind];
   return Array.isArray(raw) ? raw : [];
 }
@@ -33,11 +34,11 @@ async function readQueue(kind) {
  */
 async function writeQueue(kind, reports) {
   const bounded = reports.slice(-MAX_QUEUED_REPORTS);
-  const result = await writeSync({ [kind]: bounded });
+  const result = await writeSync({ [kind]: bounded }, STORAGE_AREAS.LOCAL);
   if (!result.ok) {
     // Losing a feedback report is not worth interrupting the user over, but it
     // must not be silent either.
-    console.warn(`[uBlockAI] could not persist ${kind}: ${result.error}`);
+    logError("feedback", `could not persist ${kind}`, { error: result.error });
   }
   return result;
 }
