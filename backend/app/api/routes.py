@@ -16,7 +16,6 @@ load_dotenv(env_path)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY environment variable is not set")
-print(f"Loaded OPENAI_API_KEY: {OPENAI_API_KEY is not None}")
 
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional

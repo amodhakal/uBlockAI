@@ -199,7 +199,36 @@ def extract_post_text_for_llm(
     }
 
 
-def get_image_data() -> None:
+def get_image_data(
+    post_url: str,
+    caption: str = "",
+    alt_text: str = "",
+    max_images: int = 3,
+    ocr_profile: str = "fast",
+    include_caption: bool = True,
+) -> str:
+    """Run the OCR extraction and return the result as pretty-printed JSON.
+
+    When ``include_caption`` is false the caption is still reported back in its
+    own field but is left out of the combined ``llm-input-text`` payload.
+    """
+    result = extract_post_text_for_llm(
+        post_url=post_url,
+        caption=caption,
+        alt_text=alt_text,
+        max_images=max_images,
+        ocr_profile=ocr_profile,
+    )
+    if not include_caption:
+        combined = result.get("llm-input-text", "")
+        stripped_caption = caption.strip()
+        if stripped_caption and combined.startswith(stripped_caption):
+            combined = combined[len(stripped_caption) :].lstrip("\n")
+        result["llm-input-text"] = combined
+    return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Extract OCR text from a social post for LLM parsing."
     )
@@ -213,13 +242,32 @@ def get_image_data() -> None:
         default="fast",
         help="OCR pass profile: fast is quicker with fewer OCR variants; accurate runs more variants",
     )
-    args = parser.parse_args()
-
-    result = extract_post_text_for_llm(
-        post_url=args.url,
-        caption=args.caption,
-        alt_text=args.alt_text,
-        max_images=args.max_images,
-        ocr_profile=args.ocr_profile,
+    parser.add_argument(
+        "--include-caption",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Include the caption in the combined llm-input-text payload. "
+            "Enabled by default; pass --no-include-caption to omit it."
+        ),
     )
-    return json.dumps(result, indent=2, ensure_ascii=False)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    print(
+        get_image_data(
+            post_url=args.url,
+            caption=args.caption,
+            alt_text=args.alt_text,
+            max_images=args.max_images,
+            ocr_profile=args.ocr_profile,
+            include_caption=args.include_caption,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -11,7 +11,6 @@ load_dotenv(env_path)
 app = Flask(__name__)
 CORS(app, origins="*", allow_headers=["*"], methods=["*"])
 
-print(os.getenv("BACKBOARD_API_KEY"))
 app.register_blueprint(api_bp, url_prefix="/api")
 
 if __name__ == "__main__":
