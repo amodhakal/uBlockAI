@@ -1,5 +1,5 @@
 /**
- * Options page: self-hosting and credentials.
+ * Options page: self-hosting, credentials and trust settings.
  *
  * The backend URL was a hardcoded constant in the service worker, repeated in
  * the manifest, with no way to point the extension at a self-hosted deployment
@@ -17,6 +17,17 @@ import {
   writeLocal,
   writeSync,
 } from "./src/lib/settings.js";
+import {
+  clearTrustedKeys,
+  describeTrustedKey,
+  normalizeTrustedKeys,
+  removeTrustedKey,
+} from "./src/lib/trust.js";
+import {
+  TELEMETRY_METRICS,
+  buildTelemetryEvent,
+  resetPendingCounts,
+} from "./src/lib/telemetry.js";
 
 /** Message name for each text-size option. */
 const FONT_SCALE_LABEL_KEYS = {
@@ -36,6 +47,14 @@ const els = {
   test: document.getElementById("testConnection"),
   status: document.getElementById("status"),
   error: document.getElementById("error"),
+  trustList: document.getElementById("trustList"),
+  trustEmpty: document.getElementById("trustEmpty"),
+  trustStatus: document.getElementById("trustStatus"),
+  clearTrusted: document.getElementById("clearTrusted"),
+  telemetryEnabled: document.getElementById("telemetryEnabled"),
+  telemetryDetails: document.getElementById("telemetryDetails"),
+  telemetryUnsupported: document.getElementById("telemetryUnsupported"),
+  debugLogging: document.getElementById("debugLogging"),
 };
 
 function setStatus(message, tone = "ok") {
@@ -80,11 +99,44 @@ async function populate() {
   // the user chose rather than jumping after the first paint.
   applyFontScale(settings.fontScale);
   fillFontScaleSelect(settings.fontScale);
+  els.telemetryEnabled.checked = settings.telemetryEnabled;
+  els.debugLogging.checked = settings.debugLogging;
+
+  // The service worker stops uploading when a backend has answered 404. Say so
+  // rather than leaving a switched-on toggle that silently does nothing.
+  const local = await readLocal([STORAGE_KEYS.apiKey, STORAGE_KEYS.telemetryUnsupported]);
+  const unsupported = local[STORAGE_KEYS.telemetryUnsupported] === true;
+  els.telemetryUnsupported.textContent = unsupported
+    ? t("optionsTelemetryUnsupported")
+    : "";
 
   // The key is stored in local storage, not sync, so read it directly.
-  const local = await readLocal([STORAGE_KEYS.apiKey]);
   els.apiKey.value =
     typeof local[STORAGE_KEYS.apiKey] === "string" ? local[STORAGE_KEYS.apiKey] : "";
+}
+
+/**
+ * Persist a privacy toggle.
+ *
+ * The toggles write immediately rather than waiting for Save, because they
+ * apply to the whole device and leaving a "saved" state that is not in effect
+ * is exactly the ambiguity these settings must not have.
+ *
+ * @param {string} key
+ * @param {boolean} value
+ */
+async function persistFlag(key, value) {
+  const result = await writeSync({ [key]: value });
+  if (!result.ok) {
+    setError(`Could not save that setting: ${result.error}`);
+    return false;
+  }
+  if (!value) {
+    // Never leave a batch queued behind a flag the user has just turned off.
+    await resetPendingCounts();
+  }
+  setStatus("Saved.");
+  return true;
 }
 
 async function onSubmit(event) {
@@ -120,6 +172,11 @@ async function onSubmit(event) {
     setError(t("optionsErrorSaveUrl", [urlResult.error]));
     return;
   }
+
+  // Pointing the extension at a different backend invalidates what we know
+  // about the previous one, including whether it accepts usage counts.
+  await writeLocal({ [STORAGE_KEYS.telemetryUnsupported]: false });
+  await populate();
 
   const key = els.apiKey.value.trim();
   const keyResult = await writeLocal({ [STORAGE_KEYS.apiKey]: key });
@@ -197,6 +254,106 @@ async function init() {
   els.reset.addEventListener("click", onReset);
   els.test.addEventListener("click", onTestConnection);
   els.fontScale.addEventListener("change", onFontScaleChange);
+  await renderTrusted();
+  els.clearTrusted.addEventListener("click", onClearTrusted);
+
+  els.telemetryEnabled.addEventListener("change", (event) => {
+    void persistFlag(STORAGE_KEYS.telemetryEnabled, event.target.checked);
+  });
+  els.debugLogging.addEventListener("change", (event) => {
+    void persistFlag(STORAGE_KEYS.debugLogging, event.target.checked);
+  });
+
+  // Built by the same module that builds the uploaded event, so the text a
+  // user reads cannot drift from what is actually sent.
+  els.telemetryDetails.addEventListener("click", (event) => {
+    event.preventDefault();
+    const example = buildTelemetryEvent(true, { [TELEMETRY_METRICS.ANALYZED]: 12 });
+    window.alert(
+      "The only thing the extension sends is a payload like:\n\n" +
+        `${JSON.stringify(example, null, 2)}\n\n` +
+        "Counters only. No captions, image URLs, post links, or account " +
+        "information.",
+    );
+  });
+}
+
+// --------------------------------------------------------------------------
+// Trust settings
+// --------------------------------------------------------------------------
+
+function setTrustStatus(message) {
+  els.trustStatus.textContent = message;
+}
+
+/**
+ * Replace the trust list with one row per trusted post.
+ *
+ * Every node is built with createElement and filled with textContent. The keys
+ * are derived from CDN URLs on posts the user chose to trust, so they are
+ * attacker-influenced: an innerHTML template here would be an injection point
+ * in a page that can already reach the extension's storage.
+ */
+async function renderTrusted() {
+  const settings = await loadSettings();
+  const keys = normalizeTrustedKeys(settings.trustedKeys);
+
+  els.trustList.replaceChildren();
+  for (const key of keys) {
+    const row = document.createElement("li");
+
+    const label = document.createElement("span");
+    label.className = "trust-key";
+    // Short, recognisable form; the full key stays available on hover.
+    label.textContent = describeTrustedKey(key);
+    label.title = key;
+    row.append(label);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Stop trusting ${describeTrustedKey(key)}`);
+    remove.addEventListener("click", () => {
+      void onRemoveTrusted(key);
+    });
+    row.append(remove);
+
+    els.trustList.append(row);
+  }
+
+  els.trustEmpty.textContent = keys.length === 0 ? "No posts are trusted yet." : "";
+  els.clearTrusted.disabled = keys.length === 0;
+}
+
+async function onRemoveTrusted(key) {
+  const { keys, removed } = removeTrustedKey(
+    normalizeTrustedKeys((await loadSettings()).trustedKeys),
+    key,
+  );
+  if (!removed) return;
+
+  const result = await writeSync({ [STORAGE_KEYS.trustedKeys]: keys });
+  if (!result.ok) {
+    setTrustStatus(`Could not update the trust list: ${result.error}`);
+    return;
+  }
+  await renderTrusted();
+  setTrustStatus("Removed. The post will be hidden again if it trips a threshold.");
+}
+
+async function onClearTrusted() {
+  const { keys, removed } = clearTrustedKeys(
+    normalizeTrustedKeys((await loadSettings()).trustedKeys),
+  );
+  if (removed === 0) return;
+
+  const result = await writeSync({ [STORAGE_KEYS.trustedKeys]: keys });
+  if (!result.ok) {
+    setTrustStatus(`Could not update the trust list: ${result.error}`);
+    return;
+  }
+  await renderTrusted();
+  setTrustStatus(`Cleared ${removed} trusted ${removed === 1 ? "post" : "posts"}.`);
 }
 
 void init();

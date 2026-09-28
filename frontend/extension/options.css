@@ -62,6 +62,73 @@ select {
   border: 1px solid #2f353e;
 }
 
+/* Trust list ------------------------------------------------------------- */
+
+.section {
+  margin-top: 36px;
+  padding-top: 24px;
+  border-top: 1px solid #2f353e;
+}
+
+.section h2 {
+  font-size: 16px;
+  margin: 0 0 6px;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 14px 0 0;
+}
+
+.empty:empty {
+  display: none;
+}
+
+.trust-list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.trust-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid #2f353e;
+  border-radius: 6px;
+  padding: 7px 9px 7px 11px;
+}
+
+.trust-key {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  /* Keys are opaque CDN filenames; let a long one ellipsize rather than
+     stretching the row off-screen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trust-list button {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.trust-list button:hover:not(:disabled) {
+  color: var(--text);
+}
+
 input:focus-visible,
 select:focus-visible,
 button:focus-visible,
@@ -75,6 +142,36 @@ a:focus-visible {
   font-size: calc(11.5px * var(--aibot-font-scale));
   margin-top: 6px;
   line-height: 1.5;
+}
+
+.field-help code {
+  font-size: 11px;
+  background: var(--panel);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* Conditional help text, e.g. the "backend does not accept counts" notice. */
+.field-help:empty {
+  display: none;
+}
+
+.field-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-toggle label {
+  font-size: 13px;
+}
+
+/* Checkboxes share the global `input` rule, which is sized for text fields. */
+input[type="checkbox"] {
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .actions {

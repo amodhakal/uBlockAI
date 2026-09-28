@@ -18,6 +18,7 @@ import {
   STORAGE_KEYS,
   fontScaleFactor,
 } from "./defaults.js";
+import { normalizeTrustedKeys } from "./trust.js";
 
 /**
  * @typedef {object} Settings
@@ -177,20 +178,23 @@ export function writeLocal(items) {
   return writeSync(items, STORAGE_AREAS.LOCAL);
 }
 
+/** Keys `loadSettings` reads. Also the set of changes that affect rendering. */
+export const SETTINGS_KEYS = Object.freeze([
+  STORAGE_KEYS.aiGeneratedThreshold,
+  STORAGE_KEYS.newsThreshold,
+  STORAGE_KEYS.hidingAction,
+  STORAGE_KEYS.backendUrl,
+  STORAGE_KEYS.telemetryEnabled,
+  STORAGE_KEYS.trustedKeys,
+  STORAGE_KEYS.debugLogging,
+  STORAGE_KEYS.fontScale,
+]);
+
 /**
  * @returns {Promise<Settings>}
  */
 export async function loadSettings() {
-  const data = await readSync([
-    STORAGE_KEYS.aiGeneratedThreshold,
-    STORAGE_KEYS.newsThreshold,
-    STORAGE_KEYS.hidingAction,
-    STORAGE_KEYS.backendUrl,
-    STORAGE_KEYS.telemetryEnabled,
-    STORAGE_KEYS.trustedKeys,
-    STORAGE_KEYS.debugLogging,
-    STORAGE_KEYS.fontScale,
-  ]);
+  const data = await readSync([...SETTINGS_KEYS]);
   // The API key is read from local storage, never sync: Chrome sync is not
   // end-to-end encrypted, so a bearer token there would be uploaded to the
   // user's Google account in cleartext.
@@ -215,9 +219,10 @@ export async function loadSettings() {
     fontScale: Object.values(FONT_SCALES).includes(data[STORAGE_KEYS.fontScale])
       ? data[STORAGE_KEYS.fontScale]
       : DEFAULT_FONT_SCALE,
-    trustedKeys: Array.isArray(data[STORAGE_KEYS.trustedKeys])
-      ? data[STORAGE_KEYS.trustedKeys]
-      : [],
+    // Normalised, not merely Array.isArray-checked: a hand-edited or partially
+    // synced value containing non-strings used to be handed straight to the
+    // content script and written back out again.
+    trustedKeys: normalizeTrustedKeys(data[STORAGE_KEYS.trustedKeys]),
   };
 }
 
@@ -253,11 +258,18 @@ function numberOr(value, fallback) {
 
 /**
  * Subscribe to settings changes.
+ *
+ * Filtered to `SETTINGS_KEYS` on purpose. An unfiltered listener also fires for
+ * this script's own high-churn counter writes, which turned a single hide into
+ * a write -> change -> reapplyAll -> write cycle.
+ *
  * @param {(settings: Settings) => void} handler
  * @returns {() => void} unsubscribe
  */
 export function onSettingsChanged(handler) {
-  const listener = () => {
+  const listener = (changes, areaName) => {
+    if (areaName !== STORAGE_AREAS.SYNC) return;
+    if (!SETTINGS_KEYS.some((key) => key in changes)) return;
     loadSettings().then(handler);
   };
   chrome.storage.onChanged.addListener(listener);

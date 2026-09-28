@@ -102,10 +102,34 @@
     "message": "Advanced settings",
     "description": "Popup link to the options page."
   },
+  "popupTelemetryLabel": {
+    "message": "Share anonymous usage counts",
+    "description": "Popup label for the opt-in telemetry toggle."
+  },
+  "popupTelemetryHelp": {
+    "message": "Off by default. Sends how many posts were analysed, flagged and reported — never captions, images or post links. See what is sent.",
+    "description": "Help text under the opt-in telemetry toggle."
+  },
+  "popupTelemetryDetails": {
+    "message": "what is sent",
+    "description": "Link text that opens the list of telemetry fields."
+  },
 
   "optionsTitle": {
     "message": "uBlockAI settings",
     "description": "Options page heading and document title."
+  },
+  "optionsTelemetryLabel": {
+    "message": "Share anonymous usage counts",
+    "description": "Options page label for the opt-in telemetry toggle."
+  },
+  "optionsTelemetryHelp": {
+    "message": "Off by default. Sends how many posts were analysed, flagged and reported — never captions, images or post links.",
+    "description": "Help text under the options page telemetry toggle."
+  },
+  "optionsTelemetryUnsupported": {
+    "message": "This backend does not accept usage counts, so nothing is being sent. Your local counts are still recorded.",
+    "description": "Shown when the configured backend has answered 404 to a telemetry upload."
   },
   "optionsLede": {
     "message": "Point the extension at your own backend to self-host, or use the hosted service.",

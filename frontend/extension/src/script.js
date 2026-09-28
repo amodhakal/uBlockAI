@@ -8,24 +8,28 @@
 
 import { adapterForUrl, collectPosts, queryWithFallback } from "./adapters/index.js";
 import { LruCache, compactStorageKey, stableCacheKey } from "./lib/cache.js";
+import { coerceCount, recordHide, recordUnhide, restoreCounts } from "./lib/counters.js";
 import { runBounded, withTimeout } from "./lib/concurrency.js";
-import { queueReport } from "./lib/feedback.js";
+import { REPORT_KINDS, queueReport, readReportedKeys } from "./lib/feedback.js";
 import { buildAnalyzePayload } from "./lib/payload.js";
 import { createDebouncedWriter, trimToByteBudget } from "./lib/persistence.js";
 import { isCurrentPost, registerPost, resolvePostElement } from "./lib/dommap.js";
 import { logDebug, logError, setDebug } from "./lib/logging.js";
 import { clearFailure, recordFailure, shouldSkip } from "./lib/retry.js";
+import { TELEMETRY_METRICS, recordCounts } from "./lib/telemetry.js";
 import {
   announce,
   installStyles,
   markPost,
   mountPlaceholder,
+  mountReportControl,
 } from "./lib/placeholder.js";
 import { t } from "./lib/i18n.js";
 import {
   STORAGE_AREAS,
   loadSettings,
   onSettingsChanged,
+  readLocal,
   readSync,
   writeLocal,
   writeSync,
@@ -74,9 +78,18 @@ const inFlight = new Set();
 const trustedKeys = new Set();
 /** @type {Set<string>} post keys currently hidden */
 const hiddenKeys = new Set();
+/**
+ * @type {Set<string>} `kind:postKey` pairs the user has already reported.
+ *
+ * Kept in memory and seeded from the persisted queues at startup, so a report
+ * survives a reload and the control comes back disabled rather than offering
+ * the same post again. lib/feedback.js also dedupes on write; this is what
+ * keeps the UI honest between writes.
+ */
+const reportedKeys = new Set();
 
-/** Counters are high-churn and not worth syncing. */
-const counters = createDebouncedWriter(
+/** Counters are high-churn local state kept in storage.local, not sync. */
+const counterWriter = createDebouncedWriter(
   (value) => writeLocal(value, STORAGE_AREAS.LOCAL),
   HIDDEN_KEY_WRITE_DEBOUNCE_MS,
   HIDDEN_KEY_WRITE_MAX_WAIT_MS,
@@ -245,17 +258,13 @@ function hidePost(post, result) {
         videoThumb: post.videoThumb || "",
         fontScale: settings.fontScale,
         action,
+        // Re-mounting a placeholder after a settings change must not offer to
+        // report the same mistake again.
+        reported: reportedKeys.has(`${REPORT_KINDS.FALSE_POSITIVE}:${postKey}`),
       },
       {
         onReveal: () => revealPost(post, postKey),
-        onReport: () => {
-          queueReport({
-            postKey,
-            kind: "falsePositive",
-            imageUrl: post.imageUrl || "",
-            caption: post.caption || "",
-          });
-        },
+        onReport: () => reportPost(post, postKey, REPORT_KINDS.FALSE_POSITIVE),
         hadFocus,
       },
     );
@@ -269,10 +278,14 @@ function hidePost(post, result) {
 
   markPost(element, { postKey, state: "hidden" });
 
-  if (!hiddenKeys.has(postKey)) {
-    hiddenKeys.add(postKey);
-    totalHiddenCount += 1;
+  // The lifetime total moves only here, on an explicit hide transition.
+  // It must never be assigned from a DOM query: nodes come and go as the feed
+  // re-renders, so the DOM-present count is a different quantity.
+  const transition = recordHide(hiddenKeys, totalHiddenCount, postKey);
+  totalHiddenCount = transition.lifetime;
+  if (transition.added) {
     queueHiddenKeyWrite();
+    void recordCounts({ [TELEMETRY_METRICS.HIDDEN]: 1 });
   }
 }
 
@@ -286,6 +299,42 @@ function markSafe(post, postKey) {
   // this attribute, so a post without it is permanently locked at its
   // original verdict and moving a slider cannot affect it.
   markPost(element, { postKey, state: "safe" });
+  // A post that was let through is still eligible to be reported: the user may
+  // know it is misinformation even though it scored below both thresholds.
+  mountReportControl(element, postKey, {
+    reported: reportedKeys.has(`${REPORT_KINDS.FALSE_NEGATIVE}:${postKey}`),
+    onReport: () => reportPost(post, postKey, REPORT_KINDS.FALSE_NEGATIVE),
+  });
+}
+
+/**
+ * Record a report against a post, from either direction.
+ *
+ * @param {object} post
+ * @param {string} postKey
+ * @param {string} kind one of REPORT_KINDS
+ */
+function reportPost(post, postKey, kind) {
+  const marker = `${kind}:${postKey}`;
+  if (reportedKeys.has(marker)) return;
+  // Marked before the write lands, not after: the button must not be
+  // double-clickable while a storage write is in flight.
+  reportedKeys.add(marker);
+
+  void queueReport({
+    postKey,
+    kind,
+    imageUrl: post.imageUrl || "",
+    caption: post.caption || "",
+  }).then(({ queued }) => {
+    if (queued) {
+      // A count, not the report. Nothing about the post leaves the device here.
+      void recordCounts({ [TELEMETRY_METRICS.REPORTED]: 1 });
+      return;
+    }
+    // Already in the persisted queue: keep the UI consistent with storage.
+    logDebug("feedback", `duplicate ${kind} report ignored`);
+  });
 }
 
 /**
@@ -298,6 +347,7 @@ function revealPost(post, postKey) {
   const original = originalContent.get(postKey);
   if (!element || !original) return;
 
+  // Replacing the children drops anything the report flow appended.
   element.innerHTML = original;
   element.removeAttribute("data-aibot-removed");
   element.setAttribute("data-aibot-temp-visible", "true");
@@ -358,8 +408,15 @@ function rehideRevealed() {
         aiScore: result.aiScore,
         newsScore: result.newsScore,
         action: settings.hidingAction,
+        reported: reportedKeys.has(`${REPORT_KINDS.FALSE_POSITIVE}:${postKey}`),
       },
-      { onReveal: () => revealPost({ element }, postKey) },
+      {
+        onReveal: () => revealPost({ element }, postKey),
+        // Without this the "Report mistake" button on a re-hidden post is
+        // inert: the listener is only attached when a handler is supplied.
+        onReport: () =>
+          reportPost({ imageUrl: "", caption: "" }, postKey, REPORT_KINDS.FALSE_POSITIVE),
+      },
     );
     if (placeholder) element.replaceChildren(placeholder);
     markPost(element, { postKey, state: "hidden" });
@@ -400,11 +457,18 @@ function reapplyAll() {
       settings.newsThreshold,
     );
 
-    if (shouldHide && !hiddenKeys.has(postKey)) {
-      hidePost({ element, imageUrl: null, caption: "" }, result);
-    } else if (!shouldHide && hiddenKeys.has(postKey)) {
-      hiddenKeys.delete(postKey);
-      totalHiddenCount = Math.max(0, totalHiddenCount - 1);
+    if (shouldHide) {
+      // Membership of hiddenKeys is not a reliable "is this post currently
+      // hidden" test: a post the user revealed with "Show post anyway" stays in
+      // the set, so testing it here meant removing a post from the options-page
+      // trust list did nothing until the next reload. What is on screen is the
+      // thing to look at instead.
+      if (!element.querySelector(".aibot-placeholder")) {
+        hidePost({ element, imageUrl: null, caption: "" }, result);
+      }
+    } else if (hiddenKeys.has(postKey)) {
+      const transition = recordUnhide(hiddenKeys, totalHiddenCount, postKey);
+      totalHiddenCount = transition.lifetime;
       const original = originalContent.get(postKey);
       if (original && element.isConnected) {
         element.innerHTML = original;
@@ -479,10 +543,11 @@ async function scan() {
   // Counters are high-churn local state, not settings. Writing them to sync on
   // every batch spent the sync write budget and was semantically wrong: two
   // profiles would race on a synced counter.
-  counters.push({
+  counterWriter.push({
     [STORAGE_KEYS.analyzedCount]: totalAnalyzedCount,
     [STORAGE_KEYS.hiddenCount]: totalHiddenCount,
   });
+  void recordCounts({ [TELEMETRY_METRICS.ANALYZED]: pending.length });
 
   pending.forEach((post, index) => {
     const postKey = stableCacheKey(post);
@@ -570,6 +635,9 @@ async function loadHiddenDigests() {
 // --------------------------------------------------------------------------
 
 const observer = new MutationObserver((mutations) => {
+  // The observer only schedules a scan. It must never read the DOM to assign
+  // the persisted lifetime hiddenCount: the DOM-present count drops whenever
+  // the feed re-renders, while the lifetime total must survive mutations.
   let sawPost = false;
   for (const mutation of mutations) {
     for (const node of mutation.addedNodes) {
@@ -617,15 +685,22 @@ async function start() {
   trustedKeys.clear();
   for (const key of settings.trustedKeys) trustedKeys.add(key);
 
-  const counters = await readSync([STORAGE_KEYS.hiddenCount, STORAGE_KEYS.analyzedCount]);
-  totalHiddenCount = Number(counters[STORAGE_KEYS.hiddenCount] ?? 0) || 0;
-  totalAnalyzedCount = Number(counters[STORAGE_KEYS.analyzedCount] ?? 0) || 0;
+  for (const marker of await readReportedKeys()) reportedKeys.add(marker);
+
+  const stored = await readLocal([STORAGE_KEYS.hiddenCount, STORAGE_KEYS.analyzedCount]);
+  const restored = restoreCounts(
+    stored,
+    STORAGE_KEYS.hiddenCount,
+    STORAGE_KEYS.analyzedCount,
+  );
+  totalHiddenCount = coerceCount(restored.hidden);
+  totalAnalyzedCount = coerceCount(restored.analyzed);
 
   setDebug(settings.debugLogging === true);
   hiddenDigests = await loadHiddenDigests();
   observe();
   await scan();
-  void counters.flush();
+  void counterWriter.flush();
 }
 
 void start();
