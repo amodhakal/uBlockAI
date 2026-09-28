@@ -230,6 +230,8 @@ function hidePost(post, result) {
         aiScore: result.aiScore,
         newsScore: result.newsScore,
         imageUrl: post.imageUrl || "",
+        videoUrl: post.videoUrl || "",
+        videoThumb: post.videoThumb || "",
         action,
       },
       {
@@ -392,7 +394,7 @@ async function scan() {
   if (!settings) return;
 
   const posts = collectPosts(adapter, document).filter((post) => {
-    if (!post.imageUrl && !post.caption) return false;
+    if (!post.imageUrl && !post.videoUrl && !post.caption) return false;
     const postKey = stableCacheKey(post);
     if (!postKey) return false;
     if (trustedKeys.has(postKey)) return false;

@@ -12,11 +12,13 @@ import { parseHTML } from "linkedom";
 
 import {
   MARK_ATTRS,
+  buildBlurredMedia,
   buildPlaceholder,
   installStyles,
   markPost,
   mountPlaceholder,
 } from "./placeholder.js";
+import { findContentVideo, collectPosts, adapterForUrl } from "../adapters/index.js";
 import { isCurrentPost, registerPost, resolvePostElement } from "./dommap.js";
 import { HIDING_ACTIONS } from "./defaults.js";
 
@@ -140,6 +142,71 @@ test("the report button is disabled once reported", () => {
   const button = placeholder.querySelector(".aibot-report-fp");
   assert.equal(button.disabled, true);
   assert.match(button.textContent, /Reported/);
+});
+
+// --------------------------------------------------------------------------
+// Video posts
+// --------------------------------------------------------------------------
+
+test("findContentVideo extracts the src and poster frame", () => {
+  const post = mount(
+    '<article><video src="https://cdn/reel.mp4" poster="https://cdn/poster.jpg"></video></article>',
+  );
+  const video = findContentVideo(post);
+  assert.equal(video.src, "https://cdn/reel.mp4");
+  assert.equal(video.poster, "https://cdn/poster.jpg");
+});
+
+test("findContentVideo reads a nested source element", () => {
+  const post = mount(
+    '<article><video poster="https://cdn/poster.jpg"><source src="https://cdn/reel.mp4"></video></article>',
+  );
+  const video = findContentVideo(post);
+  assert.equal(video.src, "https://cdn/reel.mp4");
+  assert.equal(video.poster, "https://cdn/poster.jpg");
+});
+
+test("findContentVideo returns null for image-only posts", () => {
+  const post = mount('<article><img src="https://cdn/a.jpg"></article>');
+  assert.equal(findContentVideo(post), null);
+});
+
+test("collectPosts routes the poster frame through imageUrl for video posts", () => {
+  const adapter = adapterForUrl("https://www.instagram.com/");
+  const root = mount(
+    '<div><article><video src="https://cdn/reel.mp4" poster="https://cdn/poster.jpg"></video></article></div>',
+  );
+  const posts = collectPosts(adapter, root.ownerDocument || root);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].isVideo, true);
+  assert.equal(posts[0].videoUrl, "https://cdn/reel.mp4");
+  assert.equal(posts[0].videoThumb, "https://cdn/poster.jpg");
+  // The poster frame flows through the existing image path so the backend
+  // can OCR it without a video pipeline.
+  assert.equal(posts[0].imageUrl, "https://cdn/poster.jpg");
+});
+
+test("the blur action renders a paused video behind the blurred poster", () => {
+  const placeholder = buildPlaceholder({
+    postKey: "p:1",
+    imageUrl: "https://cdn/poster.jpg",
+    videoUrl: "https://cdn/reel.mp4",
+    videoThumb: "https://cdn/poster.jpg",
+    action: HIDING_ACTIONS.BLUR,
+  });
+  const video = placeholder.querySelector("video");
+  assert.ok(video, "blur action rendered no video");
+  assert.equal(video.getAttribute("src"), "https://cdn/reel.mp4");
+  assert.equal(video.getAttribute("poster"), "https://cdn/poster.jpg");
+  assert.equal(video.hasAttribute("autoplay"), false);
+});
+
+test("buildBlurredMedia drops a non-http video url but keeps the image", () => {
+  const media = buildBlurredMedia("https://cdn/poster.jpg", {
+    videoUrl: "javascript:alert(1)",
+  });
+  assert.equal(media.querySelector("video"), null);
+  assert.ok(media.querySelector("img"), "valid poster image was dropped");
 });
 
 // --------------------------------------------------------------------------

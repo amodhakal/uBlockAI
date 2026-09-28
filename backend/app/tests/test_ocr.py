@@ -6,11 +6,99 @@ from app.post_classifier import (
     _build_ocr_variants,
     _extract_best_text_from_image,
     _is_grayscale,
+    _is_media_container_url,
     _is_reasonable_ocr_line,
     _line_quality_score,
     _ocr_text_score,
+    extract_post_text_for_llm,
+    resolve_video_poster,
 )
 from app.tools.web_search_tool import parse_ddg_html
+
+
+# --------------------------------------------------------------------------
+# Video poster frames
+# --------------------------------------------------------------------------
+
+
+def test_resolve_video_poster_accepts_an_allowlisted_frame():
+    assert resolve_video_poster("https://scontent.cdninstagram.com/v/t51/p.jpg") == [
+        "https://scontent.cdninstagram.com/v/t51/p.jpg"
+    ]
+
+
+def test_resolve_video_poster_accepts_an_extensionless_frame():
+    """Real poster URLs often carry no file extension, and rejecting those
+    would send most Reels back to the login-walled scrape."""
+    assert resolve_video_poster("https://scontent.cdninstagram.com/frame?id=1")
+
+
+@pytest.mark.parametrize(
+    "poster",
+    [
+        "",
+        "   ",
+        "https://evil.example/frame.jpg",  # host not on the allowlist
+        "https://instagram.com.evil.net/frame.jpg",  # lookalike registrable domain
+        "http://169.254.169.254/latest/meta-data/",  # link-local
+        "javascript:alert(1)",  # non-http scheme
+        "file:///etc/passwd",
+        "https://scontent.cdninstagram.com/reel.mp4",  # a container, not a frame
+        "https://scontent.cdninstagram.com/" + "a" * 3000,  # oversized
+    ],
+)
+def test_resolve_video_poster_rejects_unsafe_or_unusable(poster):
+    assert resolve_video_poster(poster) == []
+
+
+def test_is_media_container_url_matches_containers_only():
+    assert _is_media_container_url("https://cdn.example/a.MP4")
+    assert _is_media_container_url("https://cdn.example/audio.m4a")
+    assert not _is_media_container_url("https://cdn.example/a.mp4/frame.jpg")
+    assert not _is_media_container_url("https://cdn.example/frame.jpg")
+
+
+def test_a_usable_poster_replaces_the_scrape(monkeypatch):
+    """The poster is what gets OCR'd; the post page is never fetched."""
+    seen = {}
+
+    def fake_ocr(image_urls, ocr_profile="fast"):
+        seen["urls"] = image_urls
+        return ("frame text", [])
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("scraped the post even though a poster was supplied")
+
+    monkeypatch.setattr("app.post_classifier._extract_ocr_text", fake_ocr)
+    monkeypatch.setattr("app.post_classifier._extract_image_urls", boom)
+
+    result = extract_post_text_for_llm(
+        post_url="https://www.instagram.com/reel/ABC/",
+        caption="a caption",
+        poster_url="https://scontent.cdninstagram.com/v/t51/p.jpg",
+    )
+    assert seen["urls"] == ["https://scontent.cdninstagram.com/v/t51/p.jpg"]
+    assert "frame text" in result["llm-input-text"]
+
+
+def test_an_unusable_poster_falls_back_to_the_scrape(monkeypatch):
+    seen = {}
+
+    def fake_extract(post_url, max_images=3):
+        seen["post_url"] = post_url
+        return ["https://scontent.cdninstagram.com/scraped.jpg"]
+
+    monkeypatch.setattr("app.post_classifier._extract_image_urls", fake_extract)
+    monkeypatch.setattr(
+        "app.post_classifier._extract_ocr_text",
+        lambda urls, ocr_profile="fast": ("", []),
+    )
+
+    extract_post_text_for_llm(
+        post_url="https://www.instagram.com/reel/ABC/",
+        poster_url="https://evil.example/frame.jpg",
+    )
+    assert seen["post_url"] == "https://www.instagram.com/reel/ABC/"
 
 
 # --------------------------------------------------------------------------

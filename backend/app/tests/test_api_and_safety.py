@@ -372,6 +372,101 @@ def test_agent_failure_returns_generic_error(client, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Video / Reel wiring
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def captured_classifier(monkeypatch):
+    """Record what analyze_claims hands the classifier, without running OCR."""
+    seen = {}
+
+    def fake(**kwargs):
+        seen.update(kwargs)
+        return {"llm-input-text": "OCR TEXT: 90-95% reduction"}
+
+    monkeypatch.setattr("app.api.routes.extract_post_text_for_llm", fake)
+    return seen
+
+
+def _stub_agent(monkeypatch):
+    from app.schemas.agent_io import AgentOutput
+
+    seen = {}
+
+    async def fake_run(self, inp, assistant_id=None):
+        seen["context"] = inp.context
+        return AgentOutput(
+            ai_generated_risk_score=0.1,
+            misinformation_risk_score=0.2,
+            verdict="likely_true",
+            confidence=0.9,
+            explanation="poster frame analysed",
+        )
+
+    monkeypatch.setattr("app.agents.langchain_agent.LangChainAgent.run", fake_run)
+    return seen
+
+
+def test_video_post_forwards_its_poster_frame(client, monkeypatch, captured_classifier):
+    agent = _stub_agent(monkeypatch)
+    response = client.post(
+        "/api/analyze_claims",
+        json={
+            "url": "https://scontent.cdninstagram.com/v/t51/p.jpg",
+            "caption": "a reel",
+            "is_video": True,
+            "video_thumb": "https://scontent.cdninstagram.com/v/t51/p.jpg",
+        },
+    )
+    assert response.status_code == 200
+    assert captured_classifier["poster_url"] == (
+        "https://scontent.cdninstagram.com/v/t51/p.jpg"
+    )
+    assert agent["context"].metadata["is_video"] is True
+
+
+def test_a_poster_is_ignored_for_an_image_post(
+    client, monkeypatch, captured_classifier
+):
+    """is_video is the switch, so a stray video_thumb cannot redirect the fetch."""
+    _stub_agent(monkeypatch)
+    response = client.post(
+        "/api/analyze_claims",
+        json={
+            "url": "https://scontent.cdninstagram.com/v/t51/p.jpg",
+            "is_video": False,
+            "video_thumb": "https://scontent.cdninstagram.com/elsewhere.jpg",
+        },
+    )
+    assert response.status_code == 200
+    assert captured_classifier["poster_url"] == ""
+
+
+def test_client_metadata_survives_the_video_flag(client, monkeypatch, captured_classifier):
+    agent = _stub_agent(monkeypatch)
+    client.post(
+        "/api/analyze_claims",
+        json={
+            "url": "https://scontent.cdninstagram.com/v/t51/p.jpg",
+            "metadata": {"permalink": "/p/ABC/"},
+            "is_video": True,
+        },
+    )
+    metadata = agent["context"].metadata
+    assert metadata["permalink"] == "/p/ABC/"
+    assert metadata["is_video"] is True
+
+
+def test_oversized_video_thumb_is_400(client):
+    response = client.post(
+        "/api/analyze_claims",
+        json={"url": "https://x/y.jpg", "video_thumb": "https://x/" + "a" * 3000},
+    )
+    assert response.status_code == 400
+
+
+# --------------------------------------------------------------------------
 # Health endpoint
 # --------------------------------------------------------------------------
 

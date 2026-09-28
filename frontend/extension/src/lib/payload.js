@@ -42,5 +42,9 @@ export function buildAnalyzePayload(post, postKey) {
     alt_text: truncate(post.imageAlt || "", MAX_ALT_TEXT_CHARS),
     metadata: post.permalink ? { permalink: post.permalink } : {},
     is_video: Boolean(post.isVideo),
+    // For video/Reel posts the image URL above is the poster frame. The raw
+    // video source travels separately so the backend can prefer the poster
+    // for OCR while knowing the post is a video.
+    video_thumb: post.videoThumb || "",
   };
 }

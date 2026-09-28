@@ -75,6 +75,8 @@ export function markPost(element, { postKey, state }) {
  * @param {number} [params.newsScore] 0..1
  * @param {string} [params.reason] short reason shown as the heading
  * @param {string} [params.imageUrl] source image, used by the blur action
+ * @param {string} [params.videoUrl] source video, used by the blur action
+ * @param {string} [params.videoThumb] poster frame shown until the video loads
  * @param {string} [params.action] one of HIDING_ACTIONS
  * @param {boolean} [params.reported] whether a report was already sent
  * @returns {HTMLElement|null} the placeholder element, or null for 'remove'
@@ -87,6 +89,8 @@ export function buildPlaceholder(params) {
     newsScore = 0,
     reason = "",
     imageUrl = "",
+    videoUrl = "",
+    videoThumb = "",
     action = HIDING_ACTIONS.PLACEHOLDER,
     reported = false,
   } = params;
@@ -102,7 +106,7 @@ export function buildPlaceholder(params) {
     // contained an image, so there was nothing to blur and it rendered
     // identically to the placeholder action.
     root.classList.add("aibot-blur");
-    const media = buildBlurredMedia(imageUrl);
+    const media = buildBlurredMedia(imageUrl, { videoUrl, videoThumb });
     if (media) root.insertBefore(media, root.firstChild);
   }
 
@@ -274,14 +278,35 @@ export function installStyles() {
  * The original content is kept but blurred, so the user can still recognise
  * the post they are looking at while the text is illegible. The image is
  * re-created rather than reusing the site's node so the site's own event
- * handlers are not attached to it.
+ * handlers are not attached to it. For video/Reel posts the poster frame is
+ * blurred the same way, with the video itself paused behind it so nothing
+ * autoplays inside a hidden post.
  *
  * @param {string|null} imageUrl
+ * @param {{videoUrl?: string, videoThumb?: string}} [video]
  * @returns {HTMLElement}
  */
-export function buildBlurredMedia(imageUrl) {
+export function buildBlurredMedia(imageUrl, video = {}) {
   const wrapper = document.createElement("div");
   wrapper.className = "aibot-media";
+
+  const videoSrc = safeUrl(video.videoUrl);
+  if (videoSrc) {
+    const node = document.createElement("video");
+    // setAttribute rather than property assignment: linkedom and older
+    // engines only reflect src/poster on HTMLMediaElement, not on the
+    // generic element these tests construct.
+    node.setAttribute("src", videoSrc);
+    const poster = safeUrl(video.videoThumb) || safeUrl(imageUrl);
+    if (poster) node.setAttribute("poster", poster);
+    node.muted = true;
+    node.loop = true;
+    node.playsInline = true;
+    node.preload = "none";
+    node.setAttribute("aria-hidden", "true");
+    node.setAttribute("tabindex", "-1");
+    wrapper.append(node);
+  }
 
   const url = safeUrl(imageUrl);
   if (url) {

@@ -341,6 +341,28 @@ test("buildAnalyzePayload carries the permalink and video flag", () => {
   assert.equal(payload.post_key, "p:ABC");
 });
 
+test("buildAnalyzePayload carries the video poster thumb", () => {
+  const payload = buildAnalyzePayload(
+    {
+      imageUrl: "https://cdn/poster.jpg",
+      caption: "c",
+      isVideo: true,
+      videoUrl: "https://cdn/reel.mp4",
+      videoThumb: "https://cdn/poster.jpg",
+    },
+    "p:1",
+  );
+  assert.equal(payload.is_video, true);
+  assert.equal(payload.video_thumb, "https://cdn/poster.jpg");
+  assert.equal(payload.url, "https://cdn/poster.jpg");
+});
+
+test("buildAnalyzePayload defaults video fields for image posts", () => {
+  const payload = buildAnalyzePayload({ imageUrl: "u", caption: "c" }, "p:1");
+  assert.equal(payload.is_video, false);
+  assert.equal(payload.video_thumb, "");
+});
+
 // --------------------------------------------------------------------------
 // Drift guards: the markup must not restate the shared constants
 // --------------------------------------------------------------------------
