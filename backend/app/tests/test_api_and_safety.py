@@ -311,7 +311,11 @@ def test_analyze_passes_non_empty_claims_to_the_agent(client, monkeypatch):
 
     response = client.post(
         "/api/analyze_claims",
-        json={"url": "https://scontent.cdninstagram.com/x.jpg", "caption": "a caption", "alt_text": ""},
+        json={
+            "url": "https://scontent.cdninstagram.com/x.jpg",
+            "caption": "a caption",
+            "alt_text": "",
+        },
     )
 
     assert response.status_code == 200
