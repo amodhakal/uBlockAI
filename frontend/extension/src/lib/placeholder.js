@@ -146,6 +146,8 @@ export function announce(message, doc) {
  * @param {string[]|string} [params.reasoningChain] camelCase alias
  * @param {object[]} [params.evidence] evidence items (see explanation.js)
  * @param {string[]|string} [params.uncertainties] unverifiable points
+ * @param {object[]} [params.claim_scores] per-claim scores (#86)
+ * @param {object[]} [params.claimScores] camelCase alias
  * @returns {HTMLElement|null} the placeholder element, or null for 'remove'
  */
 export function buildPlaceholder(params) {
@@ -167,6 +169,8 @@ export function buildPlaceholder(params) {
     reasoningChain: reasoningCamel = [],
     evidence = [],
     uncertainties = [],
+    claim_scores: claimScoresSnake = [],
+    claimScores: claimScoresCamel = [],
   } = params;
 
   if (action === HIDING_ACTIONS.REMOVE) return null;
@@ -247,6 +251,14 @@ export function buildPlaceholder(params) {
     reasoning_chain,
     evidence,
     uncertainties,
+    // Claim-level scores (#86). Empty unless the backend started returning
+    // them; the detail view omits the section entirely in that case.
+    claim_scores:
+      Array.isArray(claimScoresSnake) && claimScoresSnake.length > 0
+        ? claimScoresSnake
+        : claimScoresCamel,
+    aiScore,
+    newsScore,
   });
   if (details) panel.append(details);
 
@@ -392,6 +404,11 @@ const CSS = `
 .aibot-placeholder .aibot-evidence-item a { color: #4dabf7; }
 .aibot-placeholder .aibot-evidence-meta { color: #9aa3af; }
 .aibot-placeholder .aibot-evidence-summary { color: #9aa3af; }
+.aibot-placeholder .aibot-claims-list { margin: 0 0 8px 18px; padding: 0; line-height: 1.45; }
+.aibot-placeholder .aibot-claim-item { margin-bottom: 5px; overflow-wrap: anywhere; }
+.aibot-placeholder .aibot-claim-item a { color: #4dabf7; }
+.aibot-placeholder .aibot-claim-score { color: #e6e8ec; font-weight: 600; }
+.aibot-placeholder .aibot-claims-note { margin: 0 0 6px; color: #9aa3af; font-size: 12px; }
 .aibot-placeholder button {
   font: inherit; font-size: calc(13px * var(--aibot-font-scale)); font-weight: 600; cursor: pointer;
   border-radius: 999px; min-height: 24px; padding: 8px 16px; border: 1px solid #3b414b;

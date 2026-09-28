@@ -11,9 +11,13 @@
  * where evidence items are { source_url?, title?, summary?, supporting?,
  * source_credibility? }. Every field is optional here: the detail block is
  * omitted entirely when there is nothing to show.
+ *
+ * Claim-level scores (#86) are rendered from claim-scores.js, which degrades to
+ * "no claim rows" rather than inventing any.
  */
 
 import { safeUrl } from "./sanitize.js";
+import { buildClaimScoresList } from "./claim-scores.js";
 
 /** Human labels for the backend Verdict enum. Unknown values pass through. */
 export const VERDICT_LABELS = Object.freeze({
@@ -51,7 +55,6 @@ export function normalizeExplanation(result = {}) {
     uncertainties,
   };
 }
-
 /**
  * Whether there is anything worth expanding: a reasoning step, an evidence
  * item, an uncertainty, or a verdict/confidence badge beyond the summary.
@@ -160,6 +163,16 @@ export function buildExplanationDetails(result = {}) {
     verdictRow.textContent = parts.join(" · ");
     body.append(verdictRow);
   }
+
+  // Claim-level scores (#86). Returns null when the backend sent no per-claim
+  // data, so the section is simply absent rather than showing a fabricated
+  // breakdown. The post-level scores are already rendered above by
+  // placeholder.js, which is the honest degraded state.
+  const claimsEl = buildClaimScoresList(result, {
+    postAiScore: result?.aiScore,
+    postNewsScore: result?.newsScore,
+  });
+  if (claimsEl) body.append(claimsEl);
 
   if (n.reasoningChain.length > 0) {
     const heading = document.createElement("h4");
