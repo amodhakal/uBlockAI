@@ -2,11 +2,14 @@ import json
 from typing import Any, Dict, List
 from urllib.parse import urlparse
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
+
 from app.agents.prompts import CREDIBILITY_TOOL_PROMPT
 
 
-llm = ChatOpenAI(model="gpt-5-main", temperature=0)
+def _get_llm():
+    from app.llm import get_chat_model
+
+    return get_chat_model(timeout=60.0)
 
 
 def _domain(u: str) -> str:
@@ -45,7 +48,7 @@ async def credibility_llm(sources: List[Dict[str, Any]]) -> Dict[str, Any]:
         {"role": "user", "content": json.dumps({"sources": normalized})},
     ]
 
-    response = await llm.ainvoke(messages)
+    response = await _get_llm().ainvoke(messages)
     content = response.content
 
     try:

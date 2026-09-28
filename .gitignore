@@ -34,3 +34,21 @@ node_modules/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Test / coverage artifacts
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime data written by the backend
+backend/app/feedback/
+backend/app/.env
+
+# Local model artifacts (ONNX weights are downloaded, not committed)
+*.onnx
+*.pt
+*.pth
+*.onnx_data

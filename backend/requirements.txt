@@ -1,12 +1,25 @@
-langchain>=0.3.0
-langchain-openai>=0.2.0
-langchain-core>=0.3.0
+# Runtime dependencies for the uBlockAI backend.
+# All versions are exact pins; see requirements.lock for the fully resolved
+# transitive dependency set used in CI and production.
+#
+# Regenerate the lock with:
+#   pip install -r requirements.txt && pip freeze > requirements.lock
+
 beautifulsoup4==4.12.3
-flask==3.0.0
-flask-cors==4.0.0
+# The [async] extra is required: the API views are `async def`, and plain
+# flask raises "Install Flask with the 'async' extra" at dispatch time,
+# turning every request into a 500.
+flask[async]==3.1.2
+# 4.0.0 is affected by CVE-2024-6221 (log injection). 5.0.1 is the patched line.
+flask-cors==5.0.1
 gunicorn==23.0.0
 httpx==0.28.1
-ipykernel==6.29.5
+langchain==1.4.2
+langchain-core==1.6.5
+langchain-openai==1.1.4
+# langgraph was used by app.agents but was never listed, so fresh installs
+# failed with ImportError.
+langgraph==1.2.12
 pillow==12.1.1
 pydantic==2.12.5
 pytesseract==0.3.13
