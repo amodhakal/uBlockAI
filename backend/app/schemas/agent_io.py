@@ -78,6 +78,10 @@ class AgentOutput(BaseModel):
         default=0,
         description="Number of tool-use rounds the agent needed. Diagnostic only.",
     )
+    # Written by app.agents.langchain_agent.apply_credibility_weighting, never
+    # trusted from the model: the share of total source weight that supports the
+    # claim, or None when no evidence carried a usable credibility tier.
+    credibility_weighted_support: Optional[float] = None
 
 
 def _type_label(schema: Dict[str, Any], defs: Dict[str, Any] | None = None) -> str:

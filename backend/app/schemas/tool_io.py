@@ -34,10 +34,20 @@ class CredibilityItem(BaseModel):
     tier: str = Field(..., description="high|medium|low")
     rationale: Optional[str] = None
     signals: List[str] = Field(default_factory=list)
+    # Numeric weight derived from ``tier`` by app.tools.credibility_tool, never
+    # by the model. Synthesizers that need a number must not re-derive it.
+    weight: Annotated[float, Field(ge=0.0, le=1.0)] = 0.0
 
 
 class CredibilityOutput(BaseModel):
     items: List[CredibilityItem] = Field(default_factory=list)
+    # Aggregates over the weights above, so a caller that only sees the
+    # aggregate still knows how much credibility the source set carried.
+    tier_counts: Dict[str, int] = Field(default_factory=dict)
+    mean_weight: Optional[float] = Field(
+        default=None,
+        description="Mean numeric weight across the rated items, or None if none were rated.",
+    )
 
 
 class NumericVerifyInput(BaseModel):
