@@ -31,6 +31,8 @@ import { normalizeTrustedKeys } from "./trust.js";
  * @property {boolean} debugLogging
  * @property {string} fontScale
  * @property {string[]} trustedKeys
+ * @property {boolean} offlineMode classify on device and never contact the
+ *   backend (#88)
  */
 
 /** The hosted default. Overridable from the options page for self-hosting. */
@@ -188,6 +190,7 @@ export const SETTINGS_KEYS = Object.freeze([
   STORAGE_KEYS.trustedKeys,
   STORAGE_KEYS.debugLogging,
   STORAGE_KEYS.fontScale,
+  STORAGE_KEYS.offlineMode,
 ]);
 
 /**
@@ -223,6 +226,10 @@ export async function loadSettings() {
     // synced value containing non-strings used to be handed straight to the
     // content script and written back out again.
     trustedKeys: normalizeTrustedKeys(data[STORAGE_KEYS.trustedKeys]),
+    // Strictly `=== true`, like telemetryEnabled. A hand-edited or partially
+    // synced "true" must not switch a behaviour that suppresses every backend
+    // request on the strength of a string.
+    offlineMode: data[STORAGE_KEYS.offlineMode] === true,
   };
 }
 

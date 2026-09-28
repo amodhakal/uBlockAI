@@ -18,6 +18,7 @@ import { logDebug, logError, setDebug } from "./lib/logging.js";
 import { clearFailure, recordFailure, shouldSkip } from "./lib/retry.js";
 import { TELEMETRY_METRICS, recordCounts } from "./lib/telemetry.js";
 import {
+  MARK_ATTRS,
   announce,
   installStyles,
   markPost,
@@ -38,6 +39,14 @@ import {
 import { addTrustedKey } from "./lib/trust.js";
 import { prefilterPosts } from "./lib/prefilter.js";
 import {
+  POST_ROUTES,
+  routeForPost,
+  textForClassification,
+  toOfflineSkipRecord,
+  toResultRecord,
+} from "./lib/offline.js";
+import { classify } from "./lib/local-classifier.js";
+import {
   STAGES,
   applyStage,
   buildProgressPanel,
@@ -48,6 +57,7 @@ import {
   HIDING_ACTIONS,
   HIDDEN_KEY_WRITE_DEBOUNCE_MS,
   HIDDEN_KEY_WRITE_MAX_WAIT_MS,
+  LOCAL_INFERENCE_TIMEOUT_MS,
   MAX_CACHE_ENTRIES,
   MAX_CONCURRENT_REQUESTS,
   MAX_HIDDEN_KEYS,
@@ -97,6 +107,15 @@ const hiddenKeys = new Set();
  * keeps the UI honest between writes.
  */
 const reportedKeys = new Set();
+/**
+ * @type {Set<string>} posts offline mode declined to score
+ *
+ * Tracked separately from the retry state because a post skipped this way is not
+ * a failure to be retried. The classifier had nothing to say and there is no
+ * network to ask instead, and counting it as a failed analysis would schedule
+ * retries that run the same local classification and reach the same answer.
+ */
+const offlineSkipped = new Set();
 
 /** Counters are high-churn local state kept in storage.local, not sync. */
 const counterWriter = createDebouncedWriter(
@@ -317,6 +336,35 @@ function clearProgress(post, postKey) {
 }
 
 /**
+ * Score a post on device, without touching the network.
+ *
+ * The budget is short on purpose. The heuristic fallback is pure string work and
+ * returns immediately, so the only way to reach it is a WASM session that has
+ * wedged, and finding that out over the 45 second network budget would leave a
+ * feed that looks broken for three quarters of a minute.
+ *
+ * @param {object} post
+ * @returns {Promise<object|null>} a classification, or null when there is
+ *   nothing to classify or the classifier could not answer
+ */
+async function classifyPostLocally(post) {
+  const text = textForClassification(post);
+  if (!text) return null;
+  try {
+    return await withTimeout(
+      () => classify(text),
+      LOCAL_INFERENCE_TIMEOUT_MS,
+      "local classification",
+    );
+  } catch (error) {
+    logError("offline", "local classification failed", {
+      error: String(error?.message || error),
+    });
+    return null;
+  }
+}
+
+/**
  * Analyse one post, with a hard timeout and a conservative fallback.
  * @param {object} post
  * @returns {Promise<object>} a result record; never rejects
@@ -324,6 +372,39 @@ function clearProgress(post, postKey) {
 async function analysePost(post) {
   const postKey = stableCacheKey(post);
   if (!postKey) return { postKey: "", error: true };
+
+  // Offline mode (#88): classify here, on this device, and do not open the
+  // analysis port at all. The local score is coarse by construction - it may
+  // trip a threshold and hide a post, but it produces no verdict, no confidence
+  // and no evidence, and the panel is labelled as an on-device estimate rather
+  // than as the analysis service's answer.
+  //
+  // There is exactly one way past this block, and it is not a happy one: the
+  // classifier produced nothing. That fails open, because a post the extension
+  // silently stopped looking at is the failure this whole project exists to
+  // prevent. routeForPost narrows even that: if the browser says there is no
+  // network, there is no second opinion to fail open to, and a request would
+  // only burn the timeout.
+  if (settings?.offlineMode) {
+    const local = await classifyPostLocally(post);
+    const route = routeForPost({
+      offlineMode: true,
+      // Only an explicit false counts. navigator.onLine is true whenever the
+      // machine has *a* network, which includes the captive portal in a cafe.
+      online: navigator.onLine !== false,
+      localReady: Boolean(local),
+    });
+
+    if (route === POST_ROUTES.LOCAL) {
+      logDebug("offline", "scored on device", { postKey, source: local.source });
+      return toResultRecord(postKey, local);
+    }
+    if (route === POST_ROUTES.SKIP) {
+      logDebug("offline", "no local verdict and no network", { postKey });
+      return toOfflineSkipRecord(postKey);
+    }
+    logDebug("offline", "local classifier unavailable, asking the service", { postKey });
+  }
 
   // The service worker reads the backend URL and API key from its own storage,
   // so the content script never carries the secret. Progress comes back over
@@ -462,6 +543,13 @@ function hidePost(post, result) {
         evidence: result.evidence || [],
         uncertainties: result.uncertainties || [],
         claim_scores: result.claim_scores || [],
+        // An on-device estimate, not an analysis (#88). The panel changes its
+        // heading, its ARIA label, its score wording and adds the list of word
+        // patterns that fired. Every backend-owned field above it is empty for a
+        // local result, so nothing here can be mistaken for a verdict.
+        local: result.local === true,
+        localSource: result.localSource || "",
+        localSignals: result.localSignals || [],
         imageUrl: post.imageUrl || "",
         videoUrl: post.videoUrl || "",
         videoThumb: post.videoThumb || "",
@@ -581,6 +669,29 @@ function revealPost(post, postKey) {
   announce(t("placeholderShownLive", [BRAND]));
 }
 
+/**
+ * Release the posts offline mode declined to score.
+ *
+ * Called on every settings change, not only when offlineMode itself moves. A
+ * post that was skipped has no cached result, so nothing else in this file can
+ * bring it back: reapplyAll only walks posts it already has scores for, and
+ * scan() skips anything marked processed. Leaving them marked would mean that
+ * turning offline mode off - or lowering a threshold, or anything else - left
+ * those posts permanently unexamined, which is the one outcome offline mode must
+ * never produce.
+ */
+function clearOfflineSkips() {
+  if (offlineSkipped.size === 0) return;
+  for (const postKey of offlineSkipped) {
+    const element = resolvePostElement(postKey);
+    if (!element || !isCurrentPost(element, postKey)) continue;
+    element.removeAttribute(MARK_ATTRS.PROCESSED);
+    element.removeAttribute(MARK_ATTRS.SAFE);
+  }
+  offlineSkipped.clear();
+  scheduleScan();
+}
+
 /** Re-hide anything the user revealed, on the next scroll. */
 function rehideRevealed() {
   const revealed = document.querySelectorAll("[data-aibot-temp-visible]");
@@ -622,6 +733,9 @@ function rehideRevealed() {
         evidence: result.evidence || [],
         uncertainties: result.uncertainties || [],
         claim_scores: result.claim_scores || [],
+        local: result.local === true,
+        localSource: result.localSource || "",
+        localSignals: result.localSignals || [],
         action: settings.hidingAction,
         reported: reportedKeys.has(`${REPORT_KINDS.FALSE_POSITIVE}:${postKey}`),
       },
@@ -789,6 +903,18 @@ async function scan() {
     const outcome = results[index];
     if (outcome?.ok) {
       const value = outcome.value;
+      if (value.offline) {
+        // Deliberate, not failed: offline mode is on, the classifier had
+        // nothing, and there is no network. Recorded so the next scan does not
+        // re-classify the same post on every scroll, and released by
+        // clearOfflineSkips() as soon as any setting moves. Checked before the
+        // error branch on purpose: it must never reach the retry backoff, which
+        // would schedule attempts against a service that is not the thing that
+        // is broken.
+        offlineSkipped.add(postKey);
+        markSafe(post, postKey);
+        return;
+      }
       // A failed or timed-out analysis is not a result. Caching it would make
       // the post permanently un-analysable, which is the bug the timeout was
       // added to prevent: every later scan would hit the cached failure and
@@ -911,6 +1037,9 @@ onSettingsChanged((next) => {
   setDebug(next.debugLogging === true);
   trustedKeys.clear();
   for (const key of next.trustedKeys) trustedKeys.add(key);
+  // Any settings change can change what a post is worth re-examining for, and a
+  // post offline mode skipped is the one with no cached result to re-apply.
+  clearOfflineSkips();
   reapplyAll();
 });
 

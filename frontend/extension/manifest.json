@@ -6,6 +6,9 @@
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
   "permissions": ["storage", "alarms"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"

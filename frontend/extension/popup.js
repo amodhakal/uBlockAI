@@ -23,6 +23,8 @@ import {
   writeSync,
 } from "./src/lib/settings.js";
 import { REPORT_KIND_LIST, bucketFor } from "./src/lib/feedback.js";
+import { MODEL_STATUS_MESSAGE_KEYS } from "./src/lib/offline.js";
+import { MODEL_STATUS, describeLocalModel } from "./src/lib/local-classifier.js";
 import {
   TELEMETRY_METRICS,
   buildTelemetryEvent,
@@ -65,6 +67,8 @@ const els = {
   debugLogging: document.getElementById("debugLogging"),
   telemetryEnabled: document.getElementById("telemetryEnabled"),
   telemetryDetails: document.getElementById("telemetryDetails"),
+  offlineMode: document.getElementById("offlineMode"),
+  modelStatusValue: document.getElementById("modelStatusValue"),
 };
 
 /**
@@ -128,6 +132,26 @@ async function refreshStats() {
   );
 }
 
+/**
+ * Report which on-device classifier the user is actually getting (#88).
+ *
+ * Offline mode replaces an analysis with a local estimate, so the user has to be
+ * able to see which of the two they are being offered without opening the
+ * options page. The probe is a HEAD request and an import check, never a load:
+ * streaming 100 MB of weights to render one line would make the popup slower
+ * than the thing it describes.
+ */
+async function refreshModelStatus() {
+  const report = await describeLocalModel();
+  const key =
+    MODEL_STATUS_MESSAGE_KEYS[report.status] ||
+    MODEL_STATUS_MESSAGE_KEYS[MODEL_STATUS.HEURISTIC_ONLY];
+  els.modelStatusValue.textContent = t(key);
+  // A status is a fact about this install, not a setting, so it is announced
+  // politely and never focusable.
+  els.modelStatusValue.dataset.modelStatus = report.status;
+}
+
 async function init() {
   setDocumentLocale();
   applyTranslations(document);
@@ -169,6 +193,7 @@ async function init() {
   els.newsValue.textContent = els.newsSlider.value;
   els.debugLogging.checked = settings.debugLogging;
   els.telemetryEnabled.checked = settings.telemetryEnabled;
+  els.offlineMode.checked = settings.offlineMode;
 
   // "What is sent" shows the payload shape, built by the same module that
   // builds the real one, so the description cannot drift from the behaviour.
@@ -213,6 +238,10 @@ async function init() {
     void writeSync({ [STORAGE_KEYS.debugLogging]: event.target.checked });
   });
 
+  els.offlineMode.addEventListener("change", (event) => {
+    void writeSync({ [STORAGE_KEYS.offlineMode]: event.target.checked });
+  });
+
   els.telemetryEnabled.addEventListener("change", (event) => {
     const enabled = event.target.checked;
     void writeSync({ [STORAGE_KEYS.telemetryEnabled]: enabled }).then(async () => {
@@ -230,6 +259,7 @@ async function init() {
   });
 
   await refreshStats();
+  await refreshModelStatus();
 
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace !== "local") return;

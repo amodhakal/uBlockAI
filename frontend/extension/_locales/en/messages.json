@@ -114,6 +114,42 @@
     "message": "what is sent",
     "description": "Link text that opens the list of telemetry fields."
   },
+  "popupOfflineLabel": {
+    "message": "Classify on this device",
+    "description": "Popup label for the offline mode toggle: score posts on device instead of sending them to the analysis service."
+  },
+  "popupOfflineHelp": {
+    "message": "Off by default. Posts are scored by a small model running in this browser and are never sent to the analysis service. It is much less accurate than a full analysis, and the warning over a hidden post says so.",
+    "description": "Help text under the offline mode toggle. Must make clear that the result is a coarse local estimate, not a full analysis."
+  },
+  "popupModelLabel": {
+    "message": "On-device model",
+    "description": "Popup label for the line reporting which on-device classifier is available."
+  },
+  "popupModelStatusOnnxReady": {
+    "message": "Ready. A transformer is running on this device.",
+    "description": "Model status: the onnxruntime-web runtime and the model asset are both present and a session is built."
+  },
+  "popupModelStatusModelPresent": {
+    "message": "Installed. A transformer will load the first time it is used.",
+    "description": "Model status: the runtime and the model asset are both present but no session has been built yet."
+  },
+  "popupModelStatusMissingAsset": {
+    "message": "No model file installed, so the built-in word-pattern scorer is being used.",
+    "description": "Model status: no .onnx checkpoint is packaged with the extension."
+  },
+  "popupModelStatusRuntimeMissing": {
+    "message": "onnxruntime-web is not bundled, so the built-in word-pattern scorer is being used.",
+    "description": "Model status: the vendored onnxruntime-web build is missing from the extension package."
+  },
+  "popupModelStatusAssetUnreadable": {
+    "message": "A model is installed but not reachable from the feed, so the built-in word-pattern scorer is being used there.",
+    "description": "Model status: the assets exist but the content script is not allowed to read them."
+  },
+  "popupModelStatusHeuristicOnly": {
+    "message": "Unavailable, so the built-in word-pattern scorer is being used.",
+    "description": "Model status: no usable on-device model could be found in any state."
+  },
 
   "optionsTitle": {
     "message": "uBlockAI settings",
@@ -371,5 +407,100 @@
         "example": "uBlockAI"
       }
     }
+  },
+
+  "placeholderLocalPanelLabel": {
+    "message": "Content hidden by $BRAND$ from an on-device estimate",
+    "description": "ARIA label on the warning panel when the score came from the on-device classifier rather than the analysis service. $BRAND$ is the product name.",
+    "placeholders": {
+      "BRAND": {
+        "content": "$1",
+        "example": "uBlockAI"
+      }
+    }
+  },
+  "placeholderLocalHeading": {
+    "message": "Looks like misinformation (on-device estimate)",
+    "description": "Heading of the warning panel when the score came from the on-device classifier."
+  },
+  "placeholderLocalNote": {
+    "message": "This is a rough on-device estimate, not an analysis. The analysis service was not contacted.",
+    "description": "Standing note in the warning panel for an on-device estimate. Must not read as a verdict."
+  },
+  "placeholderLocalEngine": {
+    "message": "Scored by: $ENGINE$",
+    "description": "Names the on-device engine that produced the estimate. $ENGINE$ is the localized engine name.",
+    "placeholders": {
+      "ENGINE": {
+        "content": "$1",
+        "example": "the built-in word-pattern scorer"
+      }
+    }
+  },
+  "placeholderLocalSourceOnnx": {
+    "message": "a transformer model running in this browser",
+    "description": "Name of the on-device engine when it is the onnx transformer."
+  },
+  "placeholderLocalSourceHeuristic": {
+    "message": "the built-in word-pattern scorer",
+    "description": "Name of the on-device engine when it is the heuristic scorer."
+  },
+  "placeholderLocalSignals": {
+    "message": "Word patterns found: $SIGNALS$",
+    "description": "Lists the word patterns the on-device scorer counted. $SIGNALS$ is a comma-separated list of localized pattern names.",
+    "placeholders": {
+      "SIGNALS": {
+        "content": "$1",
+        "example": "shouting, calls to share or comment"
+      }
+    }
+  },
+  "placeholderLocalScoreAi": {
+    "message": "Estimated AI-generated: $PERCENT$%",
+    "description": "On-device AI-generation estimate readout. Deliberately not called a risk score. $PERCENT$ is an integer 0-100.",
+    "placeholders": {
+      "PERCENT": {
+        "content": "$1",
+        "example": "30"
+      }
+    }
+  },
+  "placeholderLocalScoreNews": {
+    "message": "Estimated misinformation: $PERCENT$%",
+    "description": "On-device misinformation estimate readout. Deliberately not called a risk score. $PERCENT$ is an integer 0-100.",
+    "placeholders": {
+      "PERCENT": {
+        "content": "$1",
+        "example": "20"
+      }
+    }
+  },
+  "localSignalAbsoluteQuantifier": {
+    "message": "absolutist wording",
+    "description": "On-device signal: words that assert rather than hedge, such as always, never, everyone."
+  },
+  "localSignalCallToAction": {
+    "message": "calls to share, comment or follow",
+    "description": "On-device signal: engagement instructions aimed at the reader."
+  },
+  "localSignalUrgencyAuthority": {
+    "message": "urgency and unnamed authority",
+    "description": "On-device signal: appeals to unnamed sources or experts, and pressure to act now."
+  },
+  "localSignalShouting": {
+    "message": "shouting",
+    "description": "On-device signal: a high proportion of the caption written in capitals."
+  },
+  "localSignalHashtagSpam": {
+    "message": "hashtag stuffing",
+    "description": "On-device signal: a caption made mostly of hashtags."
+  },
+  "localSignalSecondPersonImperative": {
+    "message": "instructions aimed at the reader",
+    "description": "On-device signal: sentences that open with a command addressed to the reader."
+  },
+  "localSignalSuperlative": {
+    "message": "hype words",
+    "description": "On-device signal: superlatives and miracle claims."
   }
 }

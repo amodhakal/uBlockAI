@@ -31,6 +31,7 @@ import { buildExplanationDetails } from "./explanation.js";
 import { FONT_SCALE_CSS_VARIABLE, HIDING_ACTIONS, fontScaleFactor } from "./defaults.js";
 import { focusFirstIn, onEscape } from "./focus.js";
 import { t } from "./i18n.js";
+import { SIGNAL_MESSAGE_KEYS, SOURCE_MESSAGE_KEYS } from "./offline.js";
 
 const BRAND = "uBlockAI";
 
@@ -148,6 +149,10 @@ export function announce(message, doc) {
  * @param {string[]|string} [params.uncertainties] unverifiable points
  * @param {object[]} [params.claim_scores] per-claim scores (#86)
  * @param {object[]} [params.claimScores] camelCase alias
+ * @param {boolean} [params.local] the score came from the on-device classifier
+ *   rather than the analysis service (#88)
+ * @param {string} [params.localSource] which on-device engine produced it
+ * @param {object[]} [params.localSignals] the word patterns that fired
  * @returns {HTMLElement|null} the placeholder element, or null for 'remove'
  */
 export function buildPlaceholder(params) {
@@ -171,6 +176,9 @@ export function buildPlaceholder(params) {
     uncertainties = [],
     claim_scores: claimScoresSnake = [],
     claimScores: claimScoresCamel = [],
+    local = false,
+    localSource = "",
+    localSignals = [],
   } = params;
 
   if (action === HIDING_ACTIONS.REMOVE) return null;
@@ -185,6 +193,15 @@ export function buildPlaceholder(params) {
   // The panel is focusable so Escape and the buttons are reachable, and it is a
   // named landmark so a screen reader user can jump between flagged posts.
   root.setAttribute("tabindex", "-1");
+
+  // An on-device estimate and a backend verdict look identical otherwise, and
+  // the difference is the whole point: one is a measured count of word patterns
+  // on this device, the other is an analysis. Marked on the element as well as
+  // in the text so a re-hide can tell the two apart without re-deriving it.
+  if (local) {
+    root.classList.add("aibot-placeholder-local");
+    root.dataset.source = localSource;
+  }
 
   if (action === HIDING_ACTIONS.BLUR) {
     // The blur action was inert: the class was added but the placeholder never
@@ -201,7 +218,12 @@ export function buildPlaceholder(params) {
   const panel = document.createElement("div");
   panel.className = "aibot-panel";
   panel.setAttribute("role", "region");
-  panel.setAttribute("aria-label", t("placeholderPanelLabel", [BRAND]));
+  panel.setAttribute(
+    "aria-label",
+    local
+      ? t("placeholderLocalPanelLabel", [BRAND])
+      : t("placeholderPanelLabel", [BRAND]),
+  );
 
   const icon = document.createElement("div");
   icon.className = "aibot-icon";
@@ -210,7 +232,8 @@ export function buildPlaceholder(params) {
 
   const heading = document.createElement("h3");
   heading.className = "aibot-heading";
-  heading.textContent = reason || t("placeholderHeading");
+  heading.textContent =
+    reason || (local ? t("placeholderLocalHeading") : t("placeholderHeading"));
 
   const brand = document.createElement("p");
   brand.className = "aibot-brand";
@@ -227,12 +250,21 @@ export function buildPlaceholder(params) {
     panel.append(icon, heading, brand);
   }
 
+  if (local) panel.append(buildLocalEstimate(localSource, localSignals));
+
   const scores = document.createElement("div");
   scores.className = "aibot-scores";
+  // Separate message names rather than the backend's, which say "risk". A local
+  // count of word patterns is an estimate and reading it as a risk score is
+  // exactly the overstatement offline mode has to avoid.
   const ai = document.createElement("span");
-  ai.textContent = t("placeholderScoreAi", [String(Math.round(aiScore * 100))]);
+  ai.textContent = t(local ? "placeholderLocalScoreAi" : "placeholderScoreAi", [
+    String(Math.round(aiScore * 100)),
+  ]);
   const news = document.createElement("span");
-  news.textContent = t("placeholderScoreNews", [String(Math.round(newsScore * 100))]);
+  news.textContent = t(local ? "placeholderLocalScoreNews" : "placeholderScoreNews", [
+    String(Math.round(newsScore * 100)),
+  ]);
   scores.append(ai, news);
   panel.append(scores);
 
@@ -291,6 +323,61 @@ export function buildPlaceholder(params) {
   root.append(backdrop);
 
   return root;
+}
+
+/**
+ * Build the "this is an on-device estimate" block (#88).
+ *
+ * Two statements, and only two. What produced the score, and which word
+ * patterns it counted. Both are measurements of this device's own work, and
+ * neither is a conclusion about the claim - which is why there is no verdict
+ * here and no link to any evidence.
+ *
+ * The signal names come from the scorer, which reports a stable identifier per
+ * pattern. A signal with no message name is skipped rather than rendered as a
+ * raw key, so a newly added pattern degrades to "fewer reasons listed" instead
+ * of showing a user "localSignalWhatever".
+ *
+ * @param {string} source which on-device engine produced the score
+ * @param {object[]} signals per-signal attribution from local-classifier.js
+ * @returns {HTMLElement}
+ */
+function buildLocalEstimate(source, signals) {
+  const block = document.createElement("div");
+  block.className = "aibot-local";
+
+  const note = document.createElement("p");
+  note.className = "aibot-local-note";
+  note.textContent = t("placeholderLocalNote");
+  block.append(note);
+
+  const sourceKey = SOURCE_MESSAGE_KEYS[source];
+  if (sourceKey) {
+    const engine = document.createElement("p");
+    engine.className = "aibot-local-engine";
+    engine.textContent = t("placeholderLocalEngine", [t(sourceKey)]);
+    block.append(engine);
+  }
+
+  const names = (Array.isArray(signals) ? signals : [])
+    .map((signal) => {
+      const key = SIGNAL_MESSAGE_KEYS[signal?.id];
+      if (!key) return "";
+      const label = t(key);
+      // t() hands back the message name when it cannot resolve, and a raw key
+      // inside a warning panel is worse than one fewer reason listed.
+      return label && label !== key ? label : "";
+    })
+    .filter(Boolean)
+    .slice(0, 7);
+  if (names.length > 0) {
+    const list = document.createElement("p");
+    list.className = "aibot-local-signals";
+    list.textContent = t("placeholderLocalSignals", [names.join(", ")]);
+    block.append(list);
+  }
+
+  return block;
 }
 
 /** Shown on a report control once the user has used it. */
@@ -394,6 +481,13 @@ const CSS = `
   font-size: calc(12px * var(--aibot-font-scale)); color: #9aa3af; margin-bottom: 12px; flex-wrap: wrap;
 }
 .aibot-placeholder .aibot-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.aibot-placeholder .aibot-local {
+  margin: 0 0 10px; padding: 8px 10px; text-align: left;
+  border: 1px solid #3b414b; border-radius: 8px; background: #1b1f25;
+}
+.aibot-placeholder .aibot-local-note { font-size: calc(13px * var(--aibot-font-scale)); color: #e6e8ec; margin: 0 0 4px; }
+.aibot-placeholder .aibot-local-engine { font-size: calc(12px * var(--aibot-font-scale)); color: #9aa3af; margin: 0 0 4px; }
+.aibot-placeholder .aibot-local-signals { font-size: calc(12px * var(--aibot-font-scale)); color: #cbd2dc; margin: 0; overflow-wrap: anywhere; }
 .aibot-placeholder .aibot-details { margin: 4px 0 12px; text-align: left; font-size: 13px; }
 .aibot-placeholder .aibot-details-toggle { cursor: pointer; color: #4dabf7; font-weight: 600; font-size: 13px; }
 .aibot-placeholder .aibot-details-body { margin-top: 8px; color: #cbd2dc; }
