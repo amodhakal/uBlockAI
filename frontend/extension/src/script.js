@@ -11,13 +11,27 @@ import { LruCache, compactStorageKey, stableCacheKey } from "./lib/cache.js";
 import { runBounded, withTimeout } from "./lib/concurrency.js";
 import { queueReport } from "./lib/feedback.js";
 import { buildAnalyzePayload } from "./lib/payload.js";
+import { createDebouncedWriter, trimToByteBudget } from "./lib/persistence.js";
 import { buildPlaceholder, installStyles } from "./lib/placeholder.js";
-import { loadSettings, onSettingsChanged, readSync, writeSync } from "./lib/settings.js";
+import {
+  STORAGE_AREAS,
+  loadSettings,
+  onSettingsChanged,
+  readSync,
+  writeLocal,
+  writeSync,
+} from "./lib/settings.js";
+
+import { addTrustedKey } from "./lib/trust.js";
 import {
   HIDING_ACTIONS,
+  HIDDEN_KEY_WRITE_DEBOUNCE_MS,
+  HIDDEN_KEY_WRITE_MAX_WAIT_MS,
   MAX_CACHE_ENTRIES,
   MAX_CONCURRENT_REQUESTS,
+  MAX_HIDDEN_KEYS,
   REQUEST_TIMEOUT_MS,
+  RESULT_TTL_MS,
   SCROLL_DEBOUNCE_MS,
   STORAGE_KEYS,
   shouldHidePost,
@@ -25,10 +39,26 @@ import {
 
 const BRAND = "uBlockAI";
 
+/**
+ * @type {Map<string, string>} postKey -> original innerHTML
+ *
+ * Bounded because each entry is a full post's markup, tens of KB. It was a
+ * plain Map that was never pruned, so a long scroll session grew without limit
+ * even though the result cache beside it was capped.
+ */
+const originalContent = new LruCache(MAX_CACHE_ENTRIES);
+
 /** @type {LruCache<object>} */
-const resultCache = new LruCache(MAX_CACHE_ENTRIES);
-/** @type {Map<string, string>} postKey -> original innerHTML */
-const originalContent = new Map();
+const resultCache = new LruCache(MAX_CACHE_ENTRIES, {
+  ttlMs: RESULT_TTL_MS,
+  // Release the stored markup when its score ages out. hiddenKeys is
+  // deliberately NOT touched here: a post that is currently hidden must never
+  // be revealed just because its cached score expired.
+  onEvict: (postKey) => {
+    originalContent.delete(postKey);
+  },
+});
+
 /** @type {Set<string>} post keys with an analysis in flight */
 const inFlight = new Set();
 /** @type {Set<string>} post keys the user asked to trust */
@@ -36,9 +66,25 @@ const trustedKeys = new Set();
 /** @type {Set<string>} post keys currently hidden */
 const hiddenKeys = new Set();
 
+/** Counters are high-churn and not worth syncing. */
+const counters = createDebouncedWriter(
+  (value) => writeLocal(value, STORAGE_AREAS.LOCAL),
+  HIDDEN_KEY_WRITE_DEBOUNCE_MS,
+  HIDDEN_KEY_WRITE_MAX_WAIT_MS,
+);
+
+/** Hidden keys are written as a whole set, so they need coalescing too. */
+const hiddenKeyWriter = createDebouncedWriter(
+  (digests) => writeSync({ [STORAGE_KEYS.removedPostKeys]: digests }),
+  HIDDEN_KEY_WRITE_DEBOUNCE_MS,
+  HIDDEN_KEY_WRITE_MAX_WAIT_MS,
+);
+
 let settings = null;
 let totalHiddenCount = 0;
 let totalAnalyzedCount = 0;
+/** @type {Set<string>} compact digests of posts hidden in a previous session */
+let hiddenDigests = new Set();
 let scrollTimer = null;
 let scanScheduled = false;
 
@@ -138,7 +184,7 @@ function applyResult(post, result) {
   if (shouldHide) {
     hidePost(post, result);
   } else if (result.postKey && !hiddenKeys.has(result.postKey)) {
-    markSafe(post);
+    markSafe(post, result.postKey);
   }
 }
 
@@ -187,7 +233,7 @@ function hidePost(post, result) {
   if (!hiddenKeys.has(postKey)) {
     hiddenKeys.add(postKey);
     totalHiddenCount += 1;
-    persistHiddenKeys();
+    queueHiddenKeyWrite();
   }
 }
 
@@ -228,10 +274,14 @@ function attachListeners(placeholder, post, result) {
 /**
  * @param {object} post
  */
-function markSafe(post) {
+function markSafe(post, postKey) {
   if (!post.element?.isConnected) return;
   post.element.setAttribute("data-aibot-processed", "true");
   post.element.setAttribute("data-aibot-safe", "true");
+  // The key must be recorded on safe posts too. reapplyAll resolves posts by
+  // this attribute, so a post without it is permanently locked at its
+  // original verdict and moving a slider cannot affect it.
+  if (postKey) post.element.dataset.postKey = postKey;
 }
 
 /**
@@ -247,6 +297,16 @@ function revealPost(post, postKey) {
   element.innerHTML = original;
   element.removeAttribute("data-aibot-removed");
   element.setAttribute("data-aibot-temp-visible", "true");
+
+  // Persist the decision. It previously lasted only until reload, and the
+  // re-hide-on-scroll path ignored the user's thresholds, so a revealed post
+  // was re-hidden anyway after the user raised sensitivity.
+  const { keys, added } = addTrustedKey(Array.from(trustedKeys), postKey);
+  if (added) {
+    trustedKeys.clear();
+    for (const key of keys) trustedKeys.add(key);
+    void persistTrustedKeys();
+  }
 }
 
 /** Re-hide anything the user revealed, on the next scroll. */
@@ -255,8 +315,27 @@ function rehideRevealed() {
   for (const element of revealed) {
     const postKey = element.dataset.postKey;
     if (!postKey) continue;
+    if (trustedKeys.has(postKey)) {
+      element.removeAttribute("data-aibot-temp-visible");
+      continue;
+    }
+
     const result = resultCache.get(postKey);
     if (!result) continue;
+
+    // Respect the thresholds the user is actually running. This used to
+    // re-hide unconditionally.
+    if (
+      !shouldHidePost(
+        result.aiScore,
+        result.newsScore,
+        settings.aiGeneratedThreshold,
+        settings.newsThreshold,
+      )
+    ) {
+      element.removeAttribute("data-aibot-temp-visible");
+      continue;
+    }
 
     const placeholder = buildPlaceholder({
       postKey,
@@ -308,12 +387,15 @@ function reapplyAll() {
       hidePost({ element, imageUrl: null, caption: "" }, result);
     } else if (!shouldHide && hiddenKeys.has(postKey)) {
       hiddenKeys.delete(postKey);
+      totalHiddenCount = Math.max(0, totalHiddenCount - 1);
       const original = originalContent.get(postKey);
       if (original && element.isConnected) {
         element.innerHTML = original;
         element.removeAttribute("data-aibot-removed");
         element.setAttribute("data-aibot-safe", "true");
       }
+      // Persist, or the post is re-hidden on the next reload.
+      queueHiddenKeyWrite();
     }
   }
 }
@@ -328,6 +410,18 @@ async function scan() {
     if (trustedKeys.has(postKey)) return false;
     return !post.element.hasAttribute("data-aibot-processed");
   });
+
+  // Seed the in-memory set from the persisted digests, so a post hidden in a
+  // previous session is recognised as already hidden rather than counted as a
+  // new removal each reload. The digest is recomputed from the live key, so it
+  // stays correct if the key derivation changes.
+  for (const post of posts) {
+    const postKey = stableCacheKey(post);
+    if (hiddenKeys.has(postKey)) continue;
+    if (hiddenDigests.has(compactStorageKey(postKey))) {
+      hiddenKeys.add(postKey);
+    }
+  }
 
   if (posts.length === 0) return;
 
@@ -358,7 +452,10 @@ async function scan() {
   );
 
   totalAnalyzedCount += pending.length;
-  void writeSync({
+  // Counters are high-churn local state, not settings. Writing them to sync on
+  // every batch spent the sync write budget and was semantically wrong: two
+  // profiles would race on a synced counter.
+  counters.push({
     [STORAGE_KEYS.analyzedCount]: totalAnalyzedCount,
     [STORAGE_KEYS.hiddenCount]: totalHiddenCount,
   });
@@ -368,8 +465,13 @@ async function scan() {
     inFlight.delete(postKey);
     const outcome = results[index];
     if (outcome?.ok) {
-      resultCache.set(postKey, outcome.value);
-      applyResult(post, outcome.value);
+      const value = outcome.value;
+      // A failed or timed-out analysis is not a result. Caching it would make
+      // the post permanently un-analysable, which is the bug the timeout was
+      // added to prevent: every later scan would hit the cached failure and
+      // never retry.
+      if (!value.error) resultCache.set(postKey, value);
+      applyResult(post, value);
     }
   });
 }
@@ -389,34 +491,49 @@ function scheduleScan() {
 // --------------------------------------------------------------------------
 
 /**
- * Persist the set of hidden post keys.
+ * Queue a persist of the hidden post keys.
  *
- * The full set of CDN URLs was written on every change. Each URL runs to
- * several hundred characters, so the write quickly exceeded the 8 KB per-item
- * cap, the write failed, and the error was ignored. Only compact digests are
- * stored now, and the result is reported.
+ * The full set was written on every single hide. Each entry is now a compact
+ * digest rather than a CDN URL, the list is bounded by count and by serialized
+ * byte size, and writes are coalesced so a long session cannot exhaust
+ * storage.sync's 120-writes-per-minute allowance.
  */
-async function persistHiddenKeys() {
-  const compact = Array.from(hiddenKeys).map(compactStorageKey);
-  const result = await writeSync({ [STORAGE_KEYS.removedPostKeys]: compact });
-  if (!result.ok) {
+function queueHiddenKeyWrite() {
+  const bounded = Array.from(hiddenKeys).slice(-MAX_HIDDEN_KEYS);
+  const compact = bounded.map(compactStorageKey);
+  const { values, dropped } = trimToByteBudget(compact);
+  if (dropped > 0) {
     console.warn(
-      `[${BRAND}] could not persist hidden post keys: ${result.error}. ` +
-        "They will be forgotten on reload.",
+      `[${BRAND}] ${dropped} hidden-post keys exceed the storage budget and ` +
+        "will be forgotten on reload",
     );
+  }
+  hiddenKeyWriter.push(values);
+}
+
+/** Persist the user's "show anyway" decisions. */
+async function persistTrustedKeys() {
+  const result = await writeSync({ [STORAGE_KEYS.trustedKeys]: Array.from(trustedKeys) });
+  if (!result.ok) {
+    console.warn(`[${BRAND}] could not persist trusted keys: ${result.error}`);
   }
 }
 
-async function restoreHiddenKeys() {
+/**
+ * Load the persisted hidden-key digests.
+ *
+ * The result is a lookup set, not a post list. It is consulted during the scan
+ * once results come back, because restoring the set beforehand matched nothing:
+ * the result cache was empty at that point, so every stored digest was
+ * discarded and previously hidden posts were re-analysed and re-hidden from
+ * scratch.
+ *
+ * @returns {Promise<Set<string>>}
+ */
+async function loadHiddenDigests() {
   const data = await readSync([STORAGE_KEYS.removedPostKeys]);
   const stored = data[STORAGE_KEYS.removedPostKeys];
-  if (!Array.isArray(stored)) return;
-  const digest = new Set(stored);
-  // Rebuild the hidden set from the stored digests so posts re-hidden on reload
-  // are not re-analysed.
-  for (const postKey of resultCache.keys()) {
-    if (digest.has(compactStorageKey(postKey))) hiddenKeys.add(postKey);
-  }
+  return new Set(Array.isArray(stored) ? stored : []);
 }
 
 // --------------------------------------------------------------------------
@@ -453,6 +570,11 @@ window.addEventListener("scroll", () => {
 });
 
 // A threshold change re-applies to known results rather than re-requesting.
+//
+// The listener is filtered to the keys that actually matter. Previously it
+// fired for every write in every namespace, including this script's own counter
+// writes, which turned a single hide into a write -> change -> reapplyAll ->
+// write cycle.
 onSettingsChanged((next) => {
   settings = next;
   trustedKeys.clear();
@@ -469,9 +591,10 @@ async function start() {
   totalHiddenCount = Number(counters[STORAGE_KEYS.hiddenCount] ?? 0) || 0;
   totalAnalyzedCount = Number(counters[STORAGE_KEYS.analyzedCount] ?? 0) || 0;
 
-  await restoreHiddenKeys();
+  hiddenDigests = await loadHiddenDigests();
   observe();
   await scan();
+  void counters.flush();
 }
 
 void start();

@@ -134,6 +134,14 @@ const genericAdapter = {
     const link = post.querySelector("a[href]");
     return link ? link.getAttribute("href") : null;
   },
+  extractMediaId(post) {
+    const node = post.querySelector("[data-media-id], a[data-id]");
+    const raw = node
+      ? node.getAttribute("data-media-id") || node.getAttribute("data-id")
+      : null;
+    if (!raw) return null;
+    return /^\d+$/.test(raw) ? raw : null;
+  },
   isVideoPost(post) {
     return Boolean(post.querySelector("video"));
   },
@@ -198,6 +206,7 @@ export function collectPosts(adapter, root, options = {}) {
       imageAlt: img ? img.getAttribute("alt") : null,
       caption: caption.slice(0, maxCaptionChars),
       permalink: adapter.extractPermalink ? adapter.extractPermalink(element) : null,
+      mediaId: adapter.extractMediaId ? adapter.extractMediaId(element) : null,
       isVideo: adapter.isVideoPost ? adapter.isVideoPost(element) : false,
     });
   }
