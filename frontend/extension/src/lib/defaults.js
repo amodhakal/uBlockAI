@@ -47,6 +47,28 @@ export const MAX_CONCURRENT_REQUESTS = 4;
 /** Maximum entries retained in the in-memory result cache. */
 export const MAX_CACHE_ENTRIES = 500;
 
+/** How long a cached score stays valid. A verdict going stale is a real harm. */
+export const RESULT_TTL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Persisted hidden-key budget.
+ *
+ * A digest serializes to roughly 14 bytes, so the 8 KB per-item cap binds at
+ * about 580 entries. 400 leaves real headroom.
+ */
+export const MAX_HIDDEN_KEYS = 400;
+
+/** Persisted trust-list bound, for the same reason. */
+export const MAX_TRUSTED_KEYS = 400;
+
+/**
+ * storage.sync permits 120 writes per minute and 1800 per hour. Writing the
+ * whole hidden-key set on every hide saturated that within a session, so writes
+ * are coalesced.
+ */
+export const HIDDEN_KEY_WRITE_DEBOUNCE_MS = 5000;
+export const HIDDEN_KEY_WRITE_MAX_WAIT_MS = 30000;
+
 /**
  * chrome.storage.sync caps each item at 8 KB and the whole area at 100 KB.
  * CDN URLs run to several hundred characters, so a long session blew the quota

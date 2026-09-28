@@ -17,10 +17,14 @@
 export class LruCache {
   /**
    * @param {number} maxEntries maximum retained entries
+   * @param {{ttlMs?: number|null, onEvict?: ((key: string, value: V) => void)|null, now?: () => number}} [options]
    */
-  constructor(maxEntries = 500) {
+  constructor(maxEntries = 500, options = {}) {
     this.maxEntries = Math.max(1, maxEntries);
-    /** @type {Map<string, V>} */
+    this.ttlMs = options.ttlMs ?? null;
+    this.onEvict = options.onEvict ?? null;
+    this._now = options.now ?? (() => Date.now());
+    /** @type {Map<string, {value: V, expiresAt: number|null}>} */
     this._entries = new Map();
   }
 
@@ -34,12 +38,17 @@ export class LruCache {
    * @returns {V | undefined}
    */
   get(key) {
-    if (!this._entries.has(key)) return undefined;
+    const entry = this._entries.get(key);
+    if (!entry) return undefined;
+    if (this._isExpired(entry)) {
+      this._entries.delete(key);
+      this._notify(key, entry.value);
+      return undefined;
+    }
     // Re-insert to move to the most-recently-used end.
-    const value = this._entries.get(key);
     this._entries.delete(key);
-    this._entries.set(key, value);
-    return value;
+    this._entries.set(key, entry);
+    return entry.value;
   }
 
   /**
@@ -48,11 +57,26 @@ export class LruCache {
    * @returns {void}
    */
   set(key, value) {
-    if (this._entries.has(key)) {
-      this._entries.delete(key);
-    }
-    this._entries.set(key, value);
+    const previous = this._entries.get(key);
+    if (previous) this._entries.delete(key);
+    this._entries.set(key, {
+      value,
+      expiresAt: this.ttlMs ? this._now() + this.ttlMs : null,
+    });
+    if (previous) this._notify(key, value);
     this._evictIfNeeded();
+  }
+
+  /** @param {string} key */
+  has(key) {
+    const entry = this._entries.get(key);
+    if (!entry) return false;
+    if (this._isExpired(entry)) {
+      this._entries.delete(key);
+      this._notify(key, entry.value);
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -60,10 +84,15 @@ export class LruCache {
    * @returns {boolean} whether an entry was removed
    */
   delete(key) {
-    return this._entries.delete(key);
+    const entry = this._entries.get(key);
+    if (!entry) return false;
+    this._entries.delete(key);
+    this._notify(key, entry.value);
+    return true;
   }
 
   clear() {
+    for (const [key, entry] of this._entries) this._notify(key, entry.value);
     this._entries.clear();
   }
 
@@ -72,12 +101,41 @@ export class LruCache {
     return Array.from(this._entries.keys());
   }
 
+  /** Drop every expired entry, reporting how many went. */
+  prune() {
+    let removed = 0;
+    for (const [key, entry] of Array.from(this._entries)) {
+      if (this._isExpired(entry)) {
+        this._entries.delete(key);
+        this._notify(key, entry.value);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  _isExpired(entry) {
+    return entry.expiresAt !== null && entry.expiresAt <= this._now();
+  }
+
+  _notify(key, value) {
+    if (this.onEvict) {
+      try {
+        this.onEvict(key, value);
+      } catch {
+        // An eviction hook must never break the cache.
+      }
+    }
+  }
+
   _evictIfNeeded() {
     while (this._entries.size > this.maxEntries) {
       // Map preserves insertion order, so the first key is the least recently
       // used.
-      const oldest = this._entries.keys().next().value;
-      this._entries.delete(oldest);
+      const oldestKey = this._entries.keys().next().value;
+      const oldest = this._entries.get(oldestKey);
+      this._entries.delete(oldestKey);
+      if (oldest) this._notify(oldestKey, oldest.value);
     }
   }
 }
@@ -101,7 +159,7 @@ export function stableCacheKey(post) {
   if (post.mediaId) return `mid:${post.mediaId}`;
 
   if (post.permalink) {
-    const match = String(post.permalink).match(/\/p\/([A-Za-z0-9_-]+)/);
+    const match = String(post.permalink).match(/\/(?:p|reels?|tv)\/([A-Za-z0-9_-]+)/);
     if (match) return `p:${match[1]}`;
   }
 
