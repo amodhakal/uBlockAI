@@ -120,6 +120,39 @@ const instagramAdapter = {
   },
 };
 
+const threadsAdapter = {
+  id: "threads",
+  // Threads is the closest DOM to Instagram (same Meta React feed stack:
+  // article-based feed, CDN images, client-rendered text), so its selectors
+  // mirror the Instagram adapter with Threads permalink shapes.
+  matches: ["https://www.threads.net/*", "https://threads.net/*"],
+  postSelectors: [
+    "article:not([data-aibot-processed])",
+    "div[role='article']:not([data-aibot-processed])",
+    "main article:not([data-aibot-processed])",
+  ],
+  imageSelectors: [
+    "article img[src*='fbcdn.net']",
+    "article img[src*='cdninstagram.com']",
+    "article img:not([aria-hidden='true']):not([src*='emoji'])",
+    "article img",
+  ],
+  captionSelectors: [
+    "article div[dir='auto']",
+    "article span[dir='auto']",
+    "div[role='article'] span[dir='auto']",
+    "article p",
+  ],
+  extractPermalink(post) {
+    // Threads permalinks look like /@user/post/<id> or /t/<id>.
+    const link = post.querySelector("a[href*='/post/'], a[href*='/t/']");
+    return link ? link.getAttribute("href") : null;
+  },
+  isVideoPost(post) {
+    return Boolean(post.querySelector("video, [aria-label*='ideo']"));
+  },
+};
+
 const genericAdapter = {
   id: "generic",
   matches: [],
@@ -148,7 +181,7 @@ const genericAdapter = {
 };
 
 /** @type {PlatformAdapter[]} */
-export const ADAPTERS = [instagramAdapter, genericAdapter];
+export const ADAPTERS = [instagramAdapter, threadsAdapter, genericAdapter];
 
 /**
  * Pick the adapter for a URL, falling back to the generic one.

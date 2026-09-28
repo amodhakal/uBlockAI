@@ -25,7 +25,7 @@ const ACTION_LABELS = {
 };
 
 /** Hosts the extension is expected to run on. */
-const SUPPORTED = ["instagram.com"];
+const SUPPORTED = ["instagram.com", "threads.net"];
 
 const els = {
   error: document.getElementById("errorMessage"),
@@ -68,7 +68,7 @@ async function init() {
   const url = await currentTabUrl();
   if (!isSupported(url)) {
     showError(
-      `${BRAND} analyses posts on Instagram. Open Instagram.com to use it, ` +
+      `${BRAND} analyses posts on Instagram and Threads. Open Instagram.com or Threads.net to use it, ` +
         "or change the threshold settings from the extension options page.",
     );
     // Settings remain editable off-site; only the post count is hidden.

@@ -12,6 +12,8 @@
   "host_permissions": [
     "https://www.instagram.com/*",
     "https://instagram.com/*",
+    "https://www.threads.net/*",
+    "https://threads.net/*",
     "https://hack-ncstate-2026.onrender.com/*"
   ],
   "optional_host_permissions": [
@@ -29,7 +31,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.instagram.com/*", "https://instagram.com/*"],
+      "matches": [
+        "https://www.instagram.com/*",
+        "https://instagram.com/*",
+        "https://www.threads.net/*",
+        "https://threads.net/*"
+      ],
       "js": ["src/script.js"],
       "run_at": "document_idle"
     }

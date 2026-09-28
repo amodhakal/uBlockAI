@@ -230,7 +230,16 @@ test("matchesPattern handles wildcards and exact matches", () => {
 
 test("adapterForUrl picks the platform adapter", () => {
   assert.equal(adapterForUrl("https://www.instagram.com/").id, "instagram");
+  assert.equal(adapterForUrl("https://www.threads.net/").id, "threads");
+  assert.equal(adapterForUrl("https://threads.net/@user/post/abc").id, "threads");
   assert.equal(adapterForUrl("https://example.com/").id, "generic");
+});
+
+test("the threads adapter keeps Instagram as the default", () => {
+  // Instagram must keep resolving to its own adapter: adding a platform must
+  // not change routing for existing URLs.
+  assert.equal(adapterForUrl("https://www.instagram.com/p/ABC123/").id, "instagram");
+  assert.equal(adapterForUrl("https://instagram.com/reel/XYZ/").id, "instagram");
 });
 
 // --------------------------------------------------------------------------
