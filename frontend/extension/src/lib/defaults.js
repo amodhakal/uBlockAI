@@ -35,6 +35,17 @@ export const MAX_MAX_IMAGES = 10;
 /** How long a single analysis may take before it is abandoned. */
 export const REQUEST_TIMEOUT_MS = 45_000;
 
+/**
+ * How long an on-device classification may take before it is abandoned.
+ *
+ * Far shorter than REQUEST_TIMEOUT_MS because the fallback is free. The
+ * heuristic scorer is pure string work and returns immediately, so the only
+ * way to reach this budget is a WASM session that has wedged, and waiting out
+ * the 45 second network budget to discover that is 45 seconds of a feed that
+ * does not respond. See src/lib/local-classifier.js.
+ */
+export const LOCAL_INFERENCE_TIMEOUT_MS = 5_000;
+
 /** How long the batch endpoint is allowed before the batch is abandoned. */
 export const BATCH_TIMEOUT_MS = 90_000;
 

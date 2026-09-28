@@ -54,3 +54,8 @@ backend/app/.env
 *.onnx_data
 node_modules/
 frontend/extension/node_modules/
+
+# Operator-supplied on-device classifier: the vendored onnxruntime-web build and
+# the exported checkpoint. See docs/models/README.md for how to produce them.
+frontend/extension/vendor/ort/
+frontend/extension/models/
