@@ -15,7 +15,13 @@ import { createDebouncedWriter, trimToByteBudget } from "./lib/persistence.js";
 import { isCurrentPost, registerPost, resolvePostElement } from "./lib/dommap.js";
 import { logDebug, logError, setDebug } from "./lib/logging.js";
 import { clearFailure, recordFailure, shouldSkip } from "./lib/retry.js";
-import { installStyles, markPost, mountPlaceholder } from "./lib/placeholder.js";
+import {
+  announce,
+  installStyles,
+  markPost,
+  mountPlaceholder,
+} from "./lib/placeholder.js";
+import { t } from "./lib/i18n.js";
 import {
   STORAGE_AREAS,
   loadSettings,
@@ -222,7 +228,12 @@ function hidePost(post, result) {
 
   if (action === HIDING_ACTIONS.REMOVE) {
     element.remove();
+    announce(t("placeholderPanelLabel", [BRAND]));
   } else {
+    // Was the user interacting with this post? If so their focus is about to be
+    // destroyed by replaceChildren, and the panel has to take it. If not,
+    // taking it would be a focus steal.
+    const hadFocus = element.contains(document.activeElement);
     const placeholder = mountPlaceholder(
       {
         postKey,
@@ -230,6 +241,9 @@ function hidePost(post, result) {
         aiScore: result.aiScore,
         newsScore: result.newsScore,
         imageUrl: post.imageUrl || "",
+        videoUrl: post.videoUrl || "",
+        videoThumb: post.videoThumb || "",
+        fontScale: settings.fontScale,
         action,
       },
       {
@@ -242,9 +256,15 @@ function hidePost(post, result) {
             caption: post.caption || "",
           });
         },
+        hadFocus,
       },
     );
-    if (placeholder) element.replaceChildren(placeholder);
+    if (placeholder) {
+      // Announced rather than focused: a screen reader user scrolling the feed
+      // must be told a post was hidden without being dragged out of the feed.
+      announce(t("placeholderPanelLabel", [BRAND]));
+      element.replaceChildren(placeholder);
+    }
   }
 
   markPost(element, { postKey, state: "hidden" });
@@ -291,6 +311,15 @@ function revealPost(post, postKey) {
     for (const key of keys) trustedKeys.add(key);
     void persistTrustedKeys();
   }
+
+  // Restoring innerHTML destroys whatever was focused inside the panel, so
+  // focus lands on the post container and the live region says what happened.
+  // A reveal reached by Escape used to drop focus onto <body> silently.
+  if (!element.hasAttribute("tabindex")) {
+    element.setAttribute("tabindex", "-1");
+  }
+  element.focus();
+  announce(t("placeholderShownLive", [BRAND]));
 }
 
 /** Re-hide anything the user revealed, on the next scroll. */
@@ -392,7 +421,7 @@ async function scan() {
   if (!settings) return;
 
   const posts = collectPosts(adapter, document).filter((post) => {
-    if (!post.imageUrl && !post.caption) return false;
+    if (!post.imageUrl && !post.videoUrl && !post.caption) return false;
     const postKey = stableCacheKey(post);
     if (!postKey) return false;
     if (trustedKeys.has(postKey)) return false;

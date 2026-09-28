@@ -19,6 +19,27 @@ function read(file) {
   return readFileSync(new URL(file, EXTENSION_ROOT), "utf8");
 }
 
+/** The default-locale message catalogue, which is the English source of truth. */
+function messages() {
+  return JSON.parse(read("_locales/en/messages.json"));
+}
+
+/**
+ * Resolve a `__MSG_name__` reference against the catalogue.
+ *
+ * The manifest cannot contain literal user-visible strings if the extension is
+ * to be localizable, so the branding assertions have to look the message up
+ * rather than compare against a hardcoded string. An unresolved reference is
+ * returned as-is, so a typo shows up as a failing assertion rather than a
+ * silently passing one.
+ */
+function resolveMsg(value) {
+  const match = /^__MSG_(.+)__$/.exec(String(value || ""));
+  if (!match) return value;
+  const entry = messages()[match[1]];
+  return entry ? entry.message : value;
+}
+
 /** Every non-test source file, excluding node_modules. */
 function sourceFiles() {
   const out = ["background.js", "popup.js", "options.js", "src/script.js"];
@@ -35,9 +56,9 @@ function sourceFiles() {
 
 test("the extension is named uBlockAI everywhere", () => {
   const m = manifest();
-  assert.equal(m.name, "uBlockAI");
-  assert.equal(m.short_name, "uBlockAI");
-  assert.equal(m.action.default_title, "uBlockAI");
+  assert.equal(resolveMsg(m.name), "uBlockAI");
+  assert.equal(resolveMsg(m.short_name), "uBlockAI");
+  assert.equal(resolveMsg(m.action.default_title), "uBlockAI");
 
   // The old placeholder name must not survive anywhere user-visible.
   for (const file of ["manifest.json", "popup.html", "options.html"]) {
@@ -47,8 +68,62 @@ test("the extension is named uBlockAI everywhere", () => {
 
 test("the description says what the extension does", () => {
   const m = manifest();
-  assert.match(m.description, /misinformation/i);
-  assert.ok(!/Your new AI Bot/.test(m.description));
+  assert.match(resolveMsg(m.description), /misinformation/i);
+  assert.ok(!/Your new AI Bot/.test(resolveMsg(m.description)));
+});
+
+// --------------------------------------------------------------------------
+// Localization
+// --------------------------------------------------------------------------
+
+test("the manifest declares a default locale", () => {
+  // Without this, chrome.i18n.getMessage returns "" for every key on a browser
+  // whose UI language we have no catalogue for, and every string breaks.
+  assert.equal(manifest().default_locale, "en");
+});
+
+test("every __MSG_ reference in the manifest resolves", () => {
+  const flat = JSON.stringify(manifest());
+  const catalog = messages();
+  const references = flat.match(/__MSG_[A-Za-z0-9_]+__/g) || [];
+  assert.ok(references.length > 0, "manifest has no localizable strings at all");
+  for (const reference of references) {
+    const name = reference.slice(6, -2);
+    assert.ok(
+      catalog[name],
+      `manifest references __MSG_${name}__, which is not in the catalogue`,
+    );
+  }
+});
+
+test("the default-locale catalogue is well formed", () => {
+  const catalog = messages();
+  assert.ok(Object.keys(catalog).length > 0, "the catalogue is empty");
+  for (const [name, entry] of Object.entries(catalog)) {
+    assert.ok(entry.message, `${name} has no message`);
+    // Chrome rejects a message with no description when the catalogue is
+    // uploaded to the Web Store, and a bare string breaks the format check.
+    assert.ok(entry.description, `${name} has no description for translators`);
+    for (const placeholder of Object.values(entry.placeholders || {})) {
+      assert.ok(placeholder.content, `${name} declares a placeholder with no content`);
+    }
+  }
+});
+
+test("every placeholder named in a message is declared", () => {
+  // A $FOO$ with no matching placeholders entry is emitted literally by
+  // chrome.i18n, so "$PERCENT$%" reaches the user.
+  for (const [name, entry] of Object.entries(messages())) {
+    const used = entry.message.match(/\$([A-Za-z0-9_]+)\$/g) || [];
+    const declared = new Set(Object.keys(entry.placeholders || {}));
+    for (const token of used) {
+      const key = token.slice(1, -1);
+      assert.ok(
+        declared.has(key),
+        `${name} uses $${key}$$ but does not declare it in placeholders`,
+      );
+    }
+  }
 });
 
 // --------------------------------------------------------------------------

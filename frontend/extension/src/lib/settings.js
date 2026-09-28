@@ -11,8 +11,12 @@ import {
   DEFAULT_AI_GENERATED_THRESHOLD,
   DEFAULT_NEWS_THRESHOLD,
   DEFAULT_HIDING_ACTION,
+  DEFAULT_FONT_SCALE,
+  FONT_SCALE_CSS_VARIABLE,
+  FONT_SCALES,
   HIDING_ACTIONS,
   STORAGE_KEYS,
+  fontScaleFactor,
 } from "./defaults.js";
 
 /**
@@ -24,6 +28,7 @@ import {
  * @property {string} apiKey
  * @property {boolean} telemetryEnabled
  * @property {boolean} debugLogging
+ * @property {string} fontScale
  * @property {string[]} trustedKeys
  */
 
@@ -45,42 +50,60 @@ const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
  * save successfully and then silently point every request at the hosted
  * backend.
  *
+ * A failure carries both an English `error` and an `errorKey`. `error` is what
+ * the service worker logs, and it stays in English so a log line is greppable
+ * and translatable after the fact. `errorKey` is what the options page renders,
+ * through chrome.i18n, so a user never has to read a developer-facing string.
+ *
  * @param {string} value
- * @returns {{ok: true, url: string} | {ok: false, error: string}}
+ * @returns {{ok: true, url: string}
+ *   | {ok: false, error: string, errorKey: string, errorParams: string[]}}
  */
 export function parseBackendUrl(value) {
+  const fail = (errorKey, error, ...errorParams) => ({
+    ok: false,
+    error,
+    errorKey,
+    errorParams,
+  });
+
   const raw = String(value ?? "").trim();
-  if (!raw) return { ok: false, error: "Enter a backend URL." };
+  if (!raw) {
+    return fail("optionsErrorEmptyUrl", "Enter a backend URL.");
+  }
 
   let url;
   try {
     url = new URL(raw);
   } catch {
-    return { ok: false, error: "That is not a valid URL." };
+    return fail("optionsErrorInvalidUrl", "That is not a valid URL.");
   }
 
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    return { ok: false, error: "Only http and https URLs are supported." };
+    return fail("optionsErrorScheme", "Only http and https URLs are supported.");
   }
 
   if (url.protocol === "http:") {
     // Chrome will not grant an http host permission for a non-loopback origin,
     // so accepting one here would fail later with an opaque permissions error.
     if (!LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) {
-      return {
-        ok: false,
-        error: "http is only allowed for localhost; use https for a remote backend.",
-      };
+      return fail(
+        "optionsErrorInsecureRemote",
+        "http is only allowed for localhost; use https for a remote backend.",
+      );
     }
   }
 
   // Redundant trailing slashes are equivalent to the root, not a sub-path.
   const path = url.pathname.replace(/\/+$/, "");
   if (path !== "") {
-    return { ok: false, error: "The backend URL must not include a path." };
+    return fail("optionsErrorPath", "The backend URL must not include a path.");
   }
   if (url.search || url.hash) {
-    return { ok: false, error: "The backend URL must not include a query or fragment." };
+    return fail(
+      "optionsErrorQuery",
+      "The backend URL must not include a query or fragment.",
+    );
   }
 
   return { ok: true, url: url.origin };
@@ -166,6 +189,7 @@ export async function loadSettings() {
     STORAGE_KEYS.telemetryEnabled,
     STORAGE_KEYS.trustedKeys,
     STORAGE_KEYS.debugLogging,
+    STORAGE_KEYS.fontScale,
   ]);
   // The API key is read from local storage, never sync: Chrome sync is not
   // end-to-end encrypted, so a bearer token there would be uploaded to the
@@ -188,10 +212,33 @@ export async function loadSettings() {
       typeof local[STORAGE_KEYS.apiKey] === "string" ? local[STORAGE_KEYS.apiKey] : "",
     telemetryEnabled: data[STORAGE_KEYS.telemetryEnabled] === true,
     debugLogging: data[STORAGE_KEYS.debugLogging] === true,
+    fontScale: Object.values(FONT_SCALES).includes(data[STORAGE_KEYS.fontScale])
+      ? data[STORAGE_KEYS.fontScale]
+      : DEFAULT_FONT_SCALE,
     trustedKeys: Array.isArray(data[STORAGE_KEYS.trustedKeys])
       ? data[STORAGE_KEYS.trustedKeys]
       : [],
   };
+}
+
+/**
+ * Publish the text-size setting as a CSS custom property.
+ *
+ * One property, read by the popup stylesheet, the options stylesheet and the
+ * in-page warning stylesheet, so the three cannot drift apart.
+ *
+ * @param {string} scale a FONT_SCALES value
+ * @param {HTMLElement} [root] defaults to <html>
+ * @returns {number} the multiplier that was applied
+ */
+export function applyFontScale(scale, root) {
+  const factor = fontScaleFactor(scale);
+  const target =
+    root || (typeof document === "undefined" ? null : document.documentElement);
+  if (target && target.style && typeof target.style.setProperty === "function") {
+    target.style.setProperty(FONT_SCALE_CSS_VARIABLE, String(factor));
+  }
+  return factor;
 }
 
 /**

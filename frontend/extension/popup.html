@@ -7,76 +7,127 @@
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
+    <!--
+      Every visible string is declared with data-i18n and falls back to the
+      English already in this file. Do not delete the English text: it is what a
+      user sees if the message catalogue fails to load, and it is what a
+      translator reads to know what the string is for.
+    -->
     <div class="overlay">
       <div class="content">
         <h1>uBlockAI</h1>
-        <p class="subtitle">Hides AI-generated misinformation in your feed</p>
+        <p class="subtitle" data-i18n="popupSubtitle">
+          Hides AI-generated misinformation in your feed
+        </p>
 
-        <div class="error-message" id="errorMessage" role="status">
-          <h2>Not on Instagram</h2>
-          <p>Open Instagram.com to analyse posts.</p>
+        <div
+          class="error-message"
+          id="errorMessage"
+          role="status"
+          aria-live="polite"
+          tabindex="-1"
+        >
+          <h2 id="errorHeading" data-i18n="popupUnsupportedHeading">
+            Not on a supported site
+          </h2>
+          <p id="errorBody" data-i18n="popupUnsupportedBody">
+            Open Instagram.com or Threads.net to analyse posts.
+          </p>
         </div>
 
         <div class="content-section" id="contentSection">
           <div class="stats">
             <div class="stat">
-              <p class="stat-label">Hidden</p>
-              <p class="stat-value">
-                <span id="hiddenCount">0</span>
+              <p class="stat-label" id="hiddenLabel" data-i18n="popupStatHidden">
+                Hidden
+              </p>
+              <p class="stat-value" aria-labelledby="hiddenLabel">
+                <span id="hiddenCount" aria-live="polite">0</span>
               </p>
             </div>
             <div class="stat">
-              <p class="stat-label">Analysed</p>
-              <p class="stat-value">
-                <span id="analyzedCount">0</span>
+              <p class="stat-label" id="analyzedLabel" data-i18n="popupStatAnalyzed">
+                Analysed
+              </p>
+              <p class="stat-value" aria-labelledby="analyzedLabel">
+                <span id="analyzedCount" aria-live="polite">0</span>
               </p>
             </div>
           </div>
 
           <div class="field">
             <div class="field-label">
-              <label for="aiThreshold">AI-generated risk threshold</label>
+              <label for="aiThreshold" data-i18n="popupThresholdAi">
+                AI-generated risk threshold
+              </label>
               <output class="field-value" id="aiThresholdValue" for="aiThreshold"
                 >3</output
               >
             </div>
             <input type="range" id="aiThreshold" aria-describedby="aiThresholdHelp" />
-            <p class="field-help" id="aiThresholdHelp">Lower hides more content</p>
+            <p class="field-help" id="aiThresholdHelp" data-i18n="popupThresholdHelp">
+              Lower hides more content
+            </p>
           </div>
 
           <div class="field">
             <div class="field-label">
-              <label for="newsThreshold">Misinformation risk threshold</label>
+              <label for="newsThreshold" data-i18n="popupThresholdNews">
+                Misinformation risk threshold
+              </label>
               <output class="field-value" id="newsThresholdValue" for="newsThreshold"
                 >2</output
               >
             </div>
             <input type="range" id="newsThreshold" aria-describedby="newsThresholdHelp" />
-            <p class="field-help" id="newsThresholdHelp">Lower hides more content</p>
+            <p class="field-help" id="newsThresholdHelp" data-i18n="popupThresholdHelp">
+              Lower hides more content
+            </p>
           </div>
 
           <div class="field">
             <div class="field-label">
-              <label for="hidingAction">When content is hidden</label>
+              <label for="hidingAction" data-i18n="popupHidingAction">
+                When content is hidden
+              </label>
             </div>
             <select id="hidingAction" aria-describedby="hidingActionHelp"></select>
-            <p class="field-help" id="hidingActionHelp">
+            <p class="field-help" id="hidingActionHelp" data-i18n="popupHidingActionHelp">
               Blurring keeps the image recognisable; removing hides it entirely.
             </p>
           </div>
 
           <div class="field">
-            <div class="field-toggle">
-              <input type="checkbox" id="debugLogging" />
-              <label for="debugLogging">Log diagnostics</label>
+            <div class="field-label">
+              <label for="fontScale" data-i18n="popupTextSize">Text size</label>
             </div>
-            <p class="field-help" id="debugLoggingHelp">
+            <select id="fontScale" aria-describedby="fontScaleHelp"></select>
+            <p class="field-help" id="fontScaleHelp" data-i18n="popupTextSizeHelp">
+              Makes text larger in the popup, the settings page and the warning shown over
+              a hidden post.
+            </p>
+          </div>
+
+          <div class="field">
+            <div class="field-toggle">
+              <input
+                type="checkbox"
+                id="debugLogging"
+                aria-describedby="debugLoggingHelp"
+              />
+              <label for="debugLogging" data-i18n="popupDebugLogging"
+                >Log diagnostics</label
+              >
+            </div>
+            <p class="field-help" id="debugLoggingHelp" data-i18n="popupDebugLoggingHelp">
               Off by default. Captions and API keys are redacted even when on.
             </p>
           </div>
 
           <p class="footer">
-            <a href="#" id="optionsLink">Advanced settings</a>
+            <a href="#" id="optionsLink" data-i18n="popupOptionsLink"
+              >Advanced settings</a
+            >
           </p>
         </div>
       </div>

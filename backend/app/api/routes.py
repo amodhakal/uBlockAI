@@ -42,6 +42,10 @@ GENERIC_FEEDBACK_ERROR = "Could not record feedback."
 MAX_CAPTION_CHARS = 5000
 MAX_ALT_TEXT_CHARS = 2000
 MAX_CLAIM_CHARS = 4000
+# A poster frame is a URL, so it is bounded like one. The classifier re-checks
+# this against its own limit; the field bound just keeps a huge string out of
+# the request log and the agent's context.
+MAX_VIDEO_THUMB_CHARS = 2048
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -89,6 +93,13 @@ class AnalyzeUrlRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     request_id: Optional[str] = None
     max_images: int = Field(default=3, ge=1, le=10)
+    # Set by the extension when the post is a Reel or video post. `video_thumb`
+    # is that video's poster frame, which is what gets OCR'd: the video itself
+    # is never fetched or decoded, because doing so needs a media-decoding
+    # dependency and an ASR model that this service does not carry. See the
+    # "Video and Reel posts" note in app/post_classifier.py.
+    is_video: bool = False
+    video_thumb: str = Field(default="", max_length=MAX_VIDEO_THUMB_CHARS)
 
 
 class FeedbackReport(BaseModel):
@@ -189,12 +200,14 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
     agent_runner = LangChainAgent(api_key=settings.openai_api_key)
     request_id = payload.request_id or "auto"
     logger.debug(
-        "analysis requested request_id=%s url=%s caption_chars=%d alt_text_chars=%d max_images=%d",
+        "analysis requested request_id=%s url=%s caption_chars=%d alt_text_chars=%d "
+        "max_images=%d is_video=%s",
         request_id,
         payload.url,
         len(payload.caption or ""),
         len(payload.alt_text or ""),
         payload.max_images,
+        payload.is_video,
     )
     try:
         ocr_res = await asyncio.to_thread(
@@ -203,14 +216,21 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
             caption=payload.caption,
             alt_text=payload.alt_text,
             max_images=payload.max_images,
+            # Only a video post's poster is a substitute for the scrape. An
+            # image post that happens to send video_thumb does not get it used.
+            poster_url=payload.video_thumb if payload.is_video else "",
         )
         llm_input_text = ocr_res.get("llm-input-text", "") or ""
+        # The agent scores AI-generated media, and a deepfake Reel and a
+        # doctored still are different problems, so it is told which it is
+        # looking at. Client metadata is preserved rather than replaced.
+        metadata = {**(payload.metadata or {}), "is_video": payload.is_video}
         # AgentContext.urls is typed HttpUrl, so build it through the model
         # rather than handing Pydantic a bare list of strings to coerce.
         context = AgentContext(
             caption=payload.caption or "",
             ocr_text=llm_input_text,
-            metadata=payload.metadata or {},
+            metadata=metadata,
         )
         context.urls = [HttpUrl(payload.url)]
         claim_input = ClaimInput(

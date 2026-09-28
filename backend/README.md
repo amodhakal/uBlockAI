@@ -1,43 +1,73 @@
-# Backend (OCR Extractor MVP)
+# Backend
 
-This folder contains an MVP Python script that extracts text from social media post images for LLM parsing.
+Flask API and OCR pipeline for uBlockAI. See the [root README](../README.md) for
+the full architecture and API reference; this file covers running the backend on
+its own.
 
 ## What it does
 
-- Accepts `post_url` + `caption`
-- Tries to collect image URLs from the page
-- Uses OCR to extract text from images
-- Optionally appends caption to OCR text for a single LLM input payload
+- Serves `POST /api/analyze_claims`, which extracts text from a post's image
+  (or a video post's poster frame) and hands it to a LangGraph ReAct agent
+- Serves `POST /api/feedback` for the extension's false-positive reports
+- Serves an unauthenticated `GET /api/health` probe
+- Exposes the OCR pipeline as a CLI for tuning it without the agent
 
 ## Setup
 
-1. Install Python 3.10+
-2. Install dependencies:
+1. Python 3.10+
+2. Create the venv and install dependencies:
 
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt   # requirements.txt to run only
 ```
 
-3. Install Tesseract OCR (required by `pytesseract`):
-   - Windows: install from UB Mannheim build or official installer
-   - Ensure `tesseract` is in PATH
+3. Install Tesseract OCR (`pytesseract` shells out to the binary):
+   - **macOS**: `brew install tesseract`
+   - **Debian/Ubuntu**: `sudo apt-get install tesseract-ocr`
+   - **Windows**: the UB Mannheim build, with `tesseract` on `PATH`
 
-## Run
+4. Create `app/.env`:
+
+```
+OPENAI_API_KEY=sk-...
+ALLOWED_ORIGINS=chrome-extension://<your-extension-id>
+```
+
+`ALLOWED_ORIGINS` is required in practice: CORS fails closed, so an empty
+allowlist blocks every browser origin.
+
+## Run the API
 
 ```bash
-python app/post_classifier.py --url "https://example.com/post" --caption "caption text here" --include-caption
+.venv/bin/python -m flask --app app.main run --host 0.0.0.0 --port 8000 --debug
 ```
 
-Output is JSON with OCR text, `llm_input_text` (OCR only or caption + OCR), and detected image URLs.
-
-## Run API Server
+Production:
 
 ```bash
-flask --app app.main run --host 0.0.0.0 --port 8000 --debug
+.venv/bin/gunicorn -c gunicorn.conf.py app.main:app
 ```
 
-Or for production:
+Analysis requires an API key. Mint one with:
 
 ```bash
-gunicorn --bind 0.0.0.0:8000 app.main:app
+.venv/bin/python -m app.scripts.manage_api_keys mint --label laptop
 ```
+
+## Run the OCR CLI
+
+```bash
+.venv/bin/python app/post_classifier.py --url "https://example.com/post" --caption "caption text here"
+```
+
+Useful flags: `--poster-url` analyses a video's poster frame instead of
+scraping the post, `--ocr-profile {fast,accurate}` picks the OCR variant grid,
+`--no-include-caption` drops the caption from the combined payload, and
+`--profile-ocr` reports per-variant timing and yield and exits.
+
+Output is a JSON object with exactly three keys: `llm-input-text` (caption, alt
+text and OCR text combined), `caption`, and `alt-text`. The key is
+`llm-input-text` with hyphens - the earlier `llm_input_text` in this file was
+never a real key. No image URLs are returned, despite what this file used to
+say.

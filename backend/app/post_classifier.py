@@ -30,6 +30,57 @@ MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 OCR_MAX_WORKERS = 6
 
 
+# --------------------------------------------------------------------------
+# Video and Reel posts
+# --------------------------------------------------------------------------
+#
+# A Reel is analysed through its poster frame: the ``poster`` attribute the
+# site already renders is a still image, so it flows through the Pillow and
+# Tesseract path above unchanged, with no new dependency and no new fetch
+# budget. The extension sends that URL as ``video_thumb`` and sets
+# ``is_video``, and the poster wins over the scrape because the scrape path
+# mostly returns the platform's login wall.
+#
+# What this deliberately does NOT do is decode the video. Both halves of the
+# original issue are future work and are called out here so the next person
+# does not read "video support" as "we watch the video":
+#
+#   * Frame sampling - needs ffmpeg or PyAV as a native runtime dependency,
+#     plus a decode budget per request (a 90 second Reel is tens of megabytes
+#     of video decoded and discarded to find the frames that carry text). The
+#     poster is the cheapest useful frame and is what ships here.
+#   * Audio transcription - needs an ASR model, and transcribing someone's
+#     spoken audio is a materially larger privacy and consent question than
+#     reading text off a frame they already published.
+#
+# Neither belongs in the change whose whole point is that Reels stop being
+# silently skipped. Neither is a small follow-up: budget for a media pipeline
+# and an ASR dependency before starting either.
+MAX_POSTER_URL_LENGTH = 2048
+
+# Extensions that identify a media container rather than a still frame. A
+# client-supplied poster carrying one of these is dropped rather than handed to
+# Pillow, which would spend its decode budget failing on it. Anything not on
+# this list is passed through to Pillow, which is the real "is this an image"
+# gate and which _download_image already bounds.
+NON_IMAGE_EXTENSIONS = (
+    ".mp4",
+    ".m4v",
+    ".mov",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".3gp",
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".ogg",
+    ".oga",
+    ".aac",
+    ".flac",
+)
+
+
 def _session() -> requests.Session:
     sess = requests.Session()
     sess.headers.update({"User-Agent": USER_AGENT})
@@ -39,6 +90,12 @@ def _session() -> requests.Session:
 def _is_image_url(url: str) -> bool:
     parsed = urlparse(url)
     return bool(re.search(r"\.(png|jpe?g|webp|bmp)$", parsed.path.lower()))
+
+
+def _is_media_container_url(url: str) -> bool:
+    """Whether a URL's path carries a known audio/video container extension."""
+    path = urlparse(url).path.lower()
+    return path.endswith(NON_IMAGE_EXTENSIONS)
 
 
 def _is_allowed_image_candidate(url: str) -> bool:
@@ -109,6 +166,46 @@ def _extract_image_urls(post_url: str, max_images: int = 3) -> List[str]:
             break
 
     return image_urls
+
+
+def resolve_video_poster(poster_url: str) -> List[str]:
+    """Return ``[poster_url]`` when a client-supplied video poster is usable.
+
+    The poster arrives in the request body, so it is exactly as
+    attacker-influenced as a URL scraped out of somebody else's post and goes
+    through the same gate: :func:`validate_url` (scheme, port, registrable
+    domain allowlist, blocked address space, length) and a media-container
+    check. There is deliberately no separate poster-specific allowlist, so
+    adding a platform to the extension does not also mean widening what the
+    backend will fetch.
+
+    Returns an empty list rather than raising when the poster is absent or
+    unusable. The caller then falls back to the normal scrape, so a Reel with
+    no poster frame degrades to the same behaviour as an image post instead of
+    failing the request.
+    """
+    raw = (poster_url or "").strip()
+    if not raw:
+        return []
+    if len(raw) > MAX_POSTER_URL_LENGTH:
+        logger.warning(
+            "video poster exceeds %d characters; ignoring", MAX_POSTER_URL_LENGTH
+        )
+        return []
+
+    try:
+        safe = validate_url(raw)
+    except UnsafeUrlError as exc:
+        logger.warning("rejecting video poster: %s", exc)
+        return []
+
+    if _is_media_container_url(safe):
+        logger.warning(
+            "video poster points at a media container, not a frame; ignoring"
+        )
+        return []
+
+    return [safe]
 
 
 def _download_image(url: str) -> Image.Image:
@@ -364,10 +461,16 @@ def extract_post_text_for_llm(
     alt_text: str = "",
     max_images: int = 3,
     ocr_profile: str = "fast",
+    poster_url: str = "",
 ) -> dict[str, str]:
     if ocr_profile not in {"fast", "accurate"}:
         raise ValueError("ocr_profile must be either 'fast' or 'accurate'")
-    image_urls = _extract_image_urls(post_url, max_images=max_images)
+    # The poster frame the caller already holds is preferred over a scrape: the
+    # scrape re-fetches a page the platform may answer with a login wall, and
+    # for a Reel there is no <img> for it to find anyway.
+    image_urls = resolve_video_poster(poster_url) or _extract_image_urls(
+        post_url, max_images=max_images
+    )
     ocr_text, _ = _extract_ocr_text(image_urls, ocr_profile=ocr_profile)
     llm_input_parts = [caption.strip(), alt_text.strip(), ocr_text.strip()]
     llm_input_text = "\n\n".join(part for part in llm_input_parts if part)
@@ -386,6 +489,7 @@ def get_image_data(
     max_images: int = 3,
     ocr_profile: str = "fast",
     include_caption: bool = True,
+    poster_url: str = "",
 ) -> str:
     """Run the OCR extraction and return the result as pretty-printed JSON.
 
@@ -398,6 +502,7 @@ def get_image_data(
         alt_text=alt_text,
         max_images=max_images,
         ocr_profile=ocr_profile,
+        poster_url=poster_url,
     )
     if not include_caption:
         combined = result.get("llm-input-text", "")
@@ -429,6 +534,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Include the caption in the combined llm-input-text payload. "
             "Enabled by default; pass --no-include-caption to omit it."
+        ),
+    )
+    parser.add_argument(
+        "--poster-url",
+        default="",
+        help=(
+            "Poster frame of a video/Reel post, used in place of scraping the "
+            "post. The frame is OCR'd like any other image; the video itself is "
+            "not decoded."
         ),
     )
     parser.add_argument(
@@ -483,6 +597,7 @@ def main(argv: list[str] | None = None) -> int:
             max_images=args.max_images,
             ocr_profile=args.ocr_profile,
             include_caption=args.include_caption,
+            poster_url=args.poster_url,
         )
     )
     return 0

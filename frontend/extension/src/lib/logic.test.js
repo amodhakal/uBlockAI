@@ -230,7 +230,16 @@ test("matchesPattern handles wildcards and exact matches", () => {
 
 test("adapterForUrl picks the platform adapter", () => {
   assert.equal(adapterForUrl("https://www.instagram.com/").id, "instagram");
+  assert.equal(adapterForUrl("https://www.threads.net/").id, "threads");
+  assert.equal(adapterForUrl("https://threads.net/@user/post/abc").id, "threads");
   assert.equal(adapterForUrl("https://example.com/").id, "generic");
+});
+
+test("the threads adapter keeps Instagram as the default", () => {
+  // Instagram must keep resolving to its own adapter: adding a platform must
+  // not change routing for existing URLs.
+  assert.equal(adapterForUrl("https://www.instagram.com/p/ABC123/").id, "instagram");
+  assert.equal(adapterForUrl("https://instagram.com/reel/XYZ/").id, "instagram");
 });
 
 // --------------------------------------------------------------------------
@@ -330,6 +339,28 @@ test("buildAnalyzePayload carries the permalink and video flag", () => {
   assert.deepEqual(payload.metadata, { permalink: "/p/ABC/" });
   assert.equal(payload.is_video, true);
   assert.equal(payload.post_key, "p:ABC");
+});
+
+test("buildAnalyzePayload carries the video poster thumb", () => {
+  const payload = buildAnalyzePayload(
+    {
+      imageUrl: "https://cdn/poster.jpg",
+      caption: "c",
+      isVideo: true,
+      videoUrl: "https://cdn/reel.mp4",
+      videoThumb: "https://cdn/poster.jpg",
+    },
+    "p:1",
+  );
+  assert.equal(payload.is_video, true);
+  assert.equal(payload.video_thumb, "https://cdn/poster.jpg");
+  assert.equal(payload.url, "https://cdn/poster.jpg");
+});
+
+test("buildAnalyzePayload defaults video fields for image posts", () => {
+  const payload = buildAnalyzePayload({ imageUrl: "u", caption: "c" }, "p:1");
+  assert.equal(payload.is_video, false);
+  assert.equal(payload.video_thumb, "");
 });
 
 // --------------------------------------------------------------------------

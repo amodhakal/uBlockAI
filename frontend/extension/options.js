@@ -6,9 +6,11 @@
  * without editing and rebuilding it.
  */
 
-import { STORAGE_KEYS } from "./src/lib/defaults.js";
+import { FONT_SCALE_ORDER, FONT_SCALES, STORAGE_KEYS } from "./src/lib/defaults.js";
+import { applyTranslations, setDocumentLocale, t } from "./src/lib/i18n.js";
 import {
   DEFAULT_BACKEND_URL,
+  applyFontScale,
   loadSettings,
   parseBackendUrl,
   readLocal,
@@ -16,11 +18,19 @@ import {
   writeSync,
 } from "./src/lib/settings.js";
 
+/** Message name for each text-size option. */
+const FONT_SCALE_LABEL_KEYS = {
+  [FONT_SCALES.SMALL]: "fontScaleSmall",
+  [FONT_SCALES.MEDIUM]: "fontScaleMedium",
+  [FONT_SCALES.LARGE]: "fontScaleLarge",
+};
+
 const els = {
   form: document.getElementById("optionsForm"),
   backendUrl: document.getElementById("backendUrl"),
-  backendUrlDefault: document.getElementById("backendUrlDefault"),
+  backendUrlHelp: document.getElementById("backendUrlHelp"),
   apiKey: document.getElementById("apiKey"),
+  fontScale: document.getElementById("fontScale"),
   save: document.getElementById("save"),
   reset: document.getElementById("reset"),
   test: document.getElementById("testConnection"),
@@ -39,10 +49,37 @@ function setError(message) {
   els.status.textContent = "";
 }
 
+/**
+ * Render a parseBackendUrl failure.
+ *
+ * The message name carries the translation; `error` is the English the service
+ * worker logs, and is used when the catalogue has no entry for it.
+ */
+function setParseError(parsed) {
+  setError(t(parsed.errorKey, parsed.errorParams) || parsed.error);
+}
+
+function fillFontScaleSelect(selected) {
+  els.fontScale.replaceChildren();
+  for (const scale of FONT_SCALE_ORDER) {
+    const option = document.createElement("option");
+    option.value = scale;
+    option.textContent = t(FONT_SCALE_LABEL_KEYS[scale]);
+    els.fontScale.append(option);
+  }
+  els.fontScale.value = selected;
+}
+
 async function populate() {
   const settings = await loadSettings();
   els.backendUrl.value = settings.backendUrl;
-  els.backendUrlDefault.textContent = DEFAULT_BACKEND_URL;
+  // Re-interpolated rather than left as the value applyTranslations wrote,
+  // because the message carries a $URL$ placeholder for the hosted default.
+  els.backendUrlHelp.textContent = t("optionsBackendUrlHelp", [DEFAULT_BACKEND_URL]);
+  // Applied before the select is filled, so the options are measured at the size
+  // the user chose rather than jumping after the first paint.
+  applyFontScale(settings.fontScale);
+  fillFontScaleSelect(settings.fontScale);
 
   // The key is stored in local storage, not sync, so read it directly.
   const local = await readLocal([STORAGE_KEYS.apiKey]);
@@ -59,7 +96,8 @@ async function onSubmit(event) {
     // Do not fall back to the default here. Silently writing the default on a
     // typo is the worst possible outcome: the user believes they are pointing
     // at their own server and are not.
-    setError(parsed.error);
+    setParseError(parsed);
+    els.backendUrl.focus();
     return;
   }
 
@@ -73,31 +111,40 @@ async function onSubmit(event) {
     granted = false;
   }
   if (!granted) {
-    setError(`Permission to reach ${parsed.url} was not granted.`);
+    setError(t("optionsErrorPermission", [parsed.url]));
     return;
   }
 
   const urlResult = await writeSync({ [STORAGE_KEYS.backendUrl]: parsed.url });
   if (!urlResult.ok) {
-    setError(`Could not save the backend URL: ${urlResult.error}`);
+    setError(t("optionsErrorSaveUrl", [urlResult.error]));
     return;
   }
 
   const key = els.apiKey.value.trim();
   const keyResult = await writeLocal({ [STORAGE_KEYS.apiKey]: key });
   if (!keyResult.ok) {
-    setError(`Could not save the API key: ${keyResult.error}`);
+    setError(t("optionsErrorSaveKey", [keyResult.error]));
     return;
   }
 
-  setStatus("Saved.");
+  setStatus(t("optionsStatusSaved"));
 }
 
 async function onReset() {
   await writeSync({ [STORAGE_KEYS.backendUrl]: DEFAULT_BACKEND_URL });
   await writeLocal({ [STORAGE_KEYS.apiKey]: "" });
   await populate();
-  setStatus("Reset to defaults.");
+  setStatus(t("optionsStatusReset"));
+}
+
+async function onFontScaleChange(event) {
+  const scale = event.target.value;
+  applyFontScale(scale);
+  const result = await writeSync({ [STORAGE_KEYS.fontScale]: scale });
+  if (!result.ok) {
+    setError(t("optionsErrorSaveUrl", [result.error]));
+  }
 }
 
 async function onTestConnection() {
@@ -105,12 +152,12 @@ async function onTestConnection() {
 
   const parsed = parseBackendUrl(els.backendUrl.value);
   if (!parsed.ok) {
-    setError(parsed.error);
+    setParseError(parsed);
     return;
   }
 
   els.test.disabled = true;
-  setStatus("Testing…");
+  setStatus(t("optionsStatusTesting"));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -119,22 +166,22 @@ async function onTestConnection() {
       signal: controller.signal,
     });
     if (response.status === 401 || response.status === 403) {
-      setError("Reachable, but the backend rejected the request. Check the API key.");
+      setError(t("optionsErrorRejected"));
     } else if (!response.ok) {
-      setError(`Reachable, but returned HTTP ${response.status}.`);
+      setError(t("optionsErrorHttpStatus", [String(response.status)]));
     } else {
       const body = await response.json().catch(() => ({}));
       setStatus(
         body.status === "ok"
-          ? `Connected. Backend is healthy (model ${body.model || "unknown"}).`
-          : `Reachable but degraded: ${JSON.stringify(body.checks || {})}`,
+          ? t("optionsStatusConnected", [body.model || "unknown"])
+          : t("optionsStatusDegraded", [JSON.stringify(body.checks || {})]),
       );
     }
   } catch (error) {
     setError(
       error?.name === "AbortError"
-        ? "No response within 8 seconds."
-        : `Could not reach the backend: ${error?.message || error}`,
+        ? t("optionsErrorTimeout")
+        : t("optionsErrorUnreachable", [error?.message || String(error)]),
     );
   } finally {
     clearTimeout(timer);
@@ -143,10 +190,13 @@ async function onTestConnection() {
 }
 
 async function init() {
+  setDocumentLocale();
+  applyTranslations(document);
   await populate();
   els.form.addEventListener("submit", onSubmit);
   els.reset.addEventListener("click", onReset);
   els.test.addEventListener("click", onTestConnection);
+  els.fontScale.addEventListener("change", onFontScaleChange);
 }
 
 void init();

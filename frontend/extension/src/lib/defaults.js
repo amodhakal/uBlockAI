@@ -104,6 +104,60 @@ export const HIDING_ACTIONS = Object.freeze({
 
 export const DEFAULT_HIDING_ACTION = HIDING_ACTIONS.PLACEHOLDER;
 
+/**
+ * Senior-friendly text sizing.
+ *
+ * The product exists to protect people who are, disproportionately, older, and
+ * the popup, the options page and the in-page warning all shipped at 11-13px.
+ * That is below what a 70-year-old with presbyopia can read without effort, and
+ * "make it bigger" was previously only reachable through the browser's own
+ * page zoom, which also enlarges the host site and, on a fixed-width popup,
+ * clips the content instead of reflowing it.
+ *
+ * One setting drives all three surfaces through a single CSS custom property,
+ * `--aibot-font-scale`, so the value cannot disagree between the popup and the
+ * warning shown over a post. `medium` and `large` are 1.25x and 1.5x, which is
+ * roughly a step of WCAG 1.4.4 text resize without the layout breakage.
+ */
+export const FONT_SCALES = Object.freeze({
+  SMALL: "small",
+  MEDIUM: "medium",
+  LARGE: "large",
+});
+
+export const DEFAULT_FONT_SCALE = FONT_SCALES.SMALL;
+
+const FONT_SCALE_FACTORS = Object.freeze({
+  [FONT_SCALES.SMALL]: 1,
+  [FONT_SCALES.MEDIUM]: 1.25,
+  [FONT_SCALES.LARGE]: 1.5,
+});
+
+/** The CSS custom property every surface reads. */
+export const FONT_SCALE_CSS_VARIABLE = "--aibot-font-scale";
+
+/**
+ * Resolve a stored font-scale name to its numeric multiplier.
+ *
+ * Anything unrecognised falls back to the default rather than producing
+ * `NaN` in a stylesheet, which would invalidate the whole custom property and
+ * leave the text at the browser default instead of the extension's.
+ *
+ * @param {unknown} value
+ * @returns {number}
+ */
+export function fontScaleFactor(value) {
+  const key = typeof value === "string" ? value : "";
+  return FONT_SCALE_FACTORS[key] ?? FONT_SCALE_FACTORS[DEFAULT_FONT_SCALE];
+}
+
+/** The scale names in the order a select should list them. */
+export const FONT_SCALE_ORDER = Object.freeze([
+  FONT_SCALES.SMALL,
+  FONT_SCALES.MEDIUM,
+  FONT_SCALES.LARGE,
+]);
+
 /** How the extension identifies itself in storage. */
 export const STORAGE_KEYS = Object.freeze({
   aiGeneratedThreshold: "aiGeneratedThreshold",
@@ -119,6 +173,7 @@ export const STORAGE_KEYS = Object.freeze({
   analyzedCount: "analyzedCount",
   falsePositiveReports: "falsePositiveReports",
   falseNegativeReports: "falseNegativeReports",
+  fontScale: "fontScale",
 });
 
 /**

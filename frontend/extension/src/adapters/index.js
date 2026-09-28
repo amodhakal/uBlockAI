@@ -21,6 +21,8 @@ import { MAX_CAPTION_CHARS } from "../lib/defaults.js";
  * @property {string} [permalink]
  * @property {string} [mediaId]
  * @property {boolean} [isVideo]
+ * @property {string|null} [videoUrl]
+ * @property {string|null} [videoThumb]
  */
 
 /**
@@ -63,6 +65,27 @@ function findContentImage(post) {
     if (img.width > 100) return img;
   }
   return null;
+}
+
+/**
+ * Find the primary video in a post, if any.
+ *
+ * Reels and video posts render a <video> element whose `poster` attribute is
+ * the frame the backend analyses (see the poster-frame strategy documented in
+ * backend/app/post_classifier.py). The src may live on the element itself or
+ * on a nested <source>.
+ *
+ * @param {Element} post
+ * @returns {{element: Element, src: string|null, poster: string|null}|null}
+ */
+export function findContentVideo(post) {
+  const video = post.querySelector("video");
+  if (!video) return null;
+  const source = video.querySelector("source[src]");
+  const src = video.getAttribute("src") || source?.getAttribute("src") || null;
+  const poster = video.getAttribute("poster") || null;
+  if (!src && !poster) return null;
+  return { element: video, src, poster };
 }
 
 function readCaption(post, captionSelectors) {
@@ -120,6 +143,39 @@ const instagramAdapter = {
   },
 };
 
+const threadsAdapter = {
+  id: "threads",
+  // Threads is the closest DOM to Instagram (same Meta React feed stack:
+  // article-based feed, CDN images, client-rendered text), so its selectors
+  // mirror the Instagram adapter with Threads permalink shapes.
+  matches: ["https://www.threads.net/*", "https://threads.net/*"],
+  postSelectors: [
+    "article:not([data-aibot-processed])",
+    "div[role='article']:not([data-aibot-processed])",
+    "main article:not([data-aibot-processed])",
+  ],
+  imageSelectors: [
+    "article img[src*='fbcdn.net']",
+    "article img[src*='cdninstagram.com']",
+    "article img:not([aria-hidden='true']):not([src*='emoji'])",
+    "article img",
+  ],
+  captionSelectors: [
+    "article div[dir='auto']",
+    "article span[dir='auto']",
+    "div[role='article'] span[dir='auto']",
+    "article p",
+  ],
+  extractPermalink(post) {
+    // Threads permalinks look like /@user/post/<id> or /t/<id>.
+    const link = post.querySelector("a[href*='/post/'], a[href*='/t/']");
+    return link ? link.getAttribute("href") : null;
+  },
+  isVideoPost(post) {
+    return Boolean(post.querySelector("video, [aria-label*='ideo']"));
+  },
+};
+
 const genericAdapter = {
   id: "generic",
   matches: [],
@@ -148,7 +204,7 @@ const genericAdapter = {
 };
 
 /** @type {PlatformAdapter[]} */
-export const ADAPTERS = [instagramAdapter, genericAdapter];
+export const ADAPTERS = [instagramAdapter, threadsAdapter, genericAdapter];
 
 /**
  * Pick the adapter for a URL, falling back to the generic one.
@@ -199,15 +255,18 @@ export function collectPosts(adapter, root, options = {}) {
     const img =
       queryWithFallback(adapter.imageSelectors, element) || findContentImage(element);
     const caption = readCaption(element, adapter.captionSelectors);
+    const video = findContentVideo(element);
 
     posts.push({
       element,
-      imageUrl: img ? img.getAttribute("src") : null,
+      imageUrl: img ? img.getAttribute("src") : video?.poster || null,
       imageAlt: img ? img.getAttribute("alt") : null,
       caption: caption.slice(0, maxCaptionChars),
       permalink: adapter.extractPermalink ? adapter.extractPermalink(element) : null,
       mediaId: adapter.extractMediaId ? adapter.extractMediaId(element) : null,
-      isVideo: adapter.isVideoPost ? adapter.isVideoPost(element) : false,
+      isVideo: adapter.isVideoPost ? adapter.isVideoPost(element) : Boolean(video),
+      videoUrl: video?.src || null,
+      videoThumb: video?.poster || null,
     });
   }
 
