@@ -6,6 +6,8 @@
  */
 
 import {
+  FONT_SCALE_ORDER,
+  FONT_SCALES,
   HIDING_ACTIONS,
   SLIDER_MAX,
   SLIDER_MIN,
@@ -13,15 +15,23 @@ import {
   fromSlider,
   toSlider,
 } from "./src/lib/defaults.js";
-import { loadSettings, readSync, writeSync } from "./src/lib/settings.js";
+import { applyTranslations, setDocumentLocale, t } from "./src/lib/i18n.js";
+import { applyFontScale, loadSettings, readSync, writeSync } from "./src/lib/settings.js";
 
 const BRAND = "uBlockAI";
 
 /** Human labels for the hiding actions, in the order they should appear. */
-const ACTION_LABELS = {
-  [HIDING_ACTIONS.PLACEHOLDER]: "Replace with a warning",
-  [HIDING_ACTIONS.BLUR]: "Blur the image",
-  [HIDING_ACTIONS.REMOVE]: "Remove it from the feed",
+const ACTION_LABEL_KEYS = {
+  [HIDING_ACTIONS.PLACEHOLDER]: "popupActionPlaceholder",
+  [HIDING_ACTIONS.BLUR]: "popupActionBlur",
+  [HIDING_ACTIONS.REMOVE]: "popupActionRemove",
+};
+
+/** Message name for each text-size option. */
+const FONT_SCALE_LABEL_KEYS = {
+  [FONT_SCALES.SMALL]: "fontScaleSmall",
+  [FONT_SCALES.MEDIUM]: "fontScaleMedium",
+  [FONT_SCALES.LARGE]: "fontScaleLarge",
 };
 
 /** Hosts the extension is expected to run on. */
@@ -29,22 +39,37 @@ const SUPPORTED = ["instagram.com", "threads.net"];
 
 const els = {
   error: document.getElementById("errorMessage"),
+  errorBody: document.getElementById("errorBody"),
   content: document.getElementById("contentSection"),
   aiSlider: document.getElementById("aiThreshold"),
   aiValue: document.getElementById("aiThresholdValue"),
   newsSlider: document.getElementById("newsThreshold"),
   newsValue: document.getElementById("newsThresholdValue"),
   actionSelect: document.getElementById("hidingAction"),
+  fontScaleSelect: document.getElementById("fontScale"),
   hiddenCount: document.getElementById("hiddenCount"),
   analyzedCount: document.getElementById("analyzedCount"),
   optionsLink: document.getElementById("optionsLink"),
   debugLogging: document.getElementById("debugLogging"),
 };
 
+/**
+ * Show the off-site notice.
+ *
+ * The notice is a `role="status"` region rather than a modal dialog: it must not
+ * steal focus from the threshold sliders, which remain usable off-site. Focus
+ * moves to the heading rather than the first control, because the user opened
+ * the popup to find out why the counters are empty.
+ *
+ * @param {string} [message] overrides the body text
+ */
 function showError(message) {
-  els.error.querySelector("p").textContent = message;
+  if (message) {
+    els.errorBody.textContent = message;
+  }
   els.error.classList.add("visible");
-  els.content.classList.remove("visible");
+  els.content.classList.add("visible");
+  els.error.focus();
 }
 
 async function currentTabUrl() {
@@ -56,6 +81,18 @@ function isSupported(url) {
   return SUPPORTED.some((host) => url.includes(host));
 }
 
+/** Fill a select from a list of [value, messageName] pairs. */
+function fillSelect(select, entries, selected) {
+  select.replaceChildren();
+  for (const [value, messageKey] of entries) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = t(messageKey);
+    select.append(option);
+  }
+  select.value = selected;
+}
+
 async function refreshStats() {
   const data = await readSync([STORAGE_KEYS.hiddenCount, STORAGE_KEYS.analyzedCount]);
   els.hiddenCount.textContent = String(Number(data[STORAGE_KEYS.hiddenCount] ?? 0) || 0);
@@ -65,17 +102,18 @@ async function refreshStats() {
 }
 
 async function init() {
+  setDocumentLocale();
+  applyTranslations(document);
+
   const url = await currentTabUrl();
   if (!isSupported(url)) {
-    showError(
-      `${BRAND} analyses posts on Instagram and Threads. Open Instagram.com or Threads.net to use it, ` +
-        "or change the threshold settings from the extension options page.",
-    );
-    // Settings remain editable off-site; only the post count is hidden.
-    els.content.classList.add("visible");
+    showError(t("popupUnsupportedDetail", [BRAND]));
   }
 
   const settings = await loadSettings();
+  // Applied before anything is measured, so the control the user is about to
+  // drag is the size it will render at.
+  applyFontScale(settings.fontScale);
 
   // The slider range and the available hiding actions come from the shared
   // constants rather than from markup. They used to be hardcoded in the HTML,
@@ -87,18 +125,21 @@ async function init() {
     slider.step = "1";
   }
 
-  for (const action of Object.values(HIDING_ACTIONS)) {
-    const option = document.createElement("option");
-    option.value = action;
-    option.textContent = ACTION_LABELS[action] ?? action;
-    els.actionSelect.append(option);
-  }
+  fillSelect(
+    els.actionSelect,
+    Object.values(HIDING_ACTIONS).map((action) => [action, ACTION_LABEL_KEYS[action]]),
+    settings.hidingAction,
+  );
+  fillSelect(
+    els.fontScaleSelect,
+    FONT_SCALE_ORDER.map((scale) => [scale, FONT_SCALE_LABEL_KEYS[scale]]),
+    settings.fontScale,
+  );
 
   els.aiSlider.value = String(toSlider(settings.aiGeneratedThreshold));
   els.aiValue.textContent = els.aiSlider.value;
   els.newsSlider.value = String(toSlider(settings.newsThreshold));
   els.newsValue.textContent = els.newsSlider.value;
-  els.actionSelect.value = settings.hidingAction;
   els.debugLogging.checked = settings.debugLogging;
 
   els.aiSlider.addEventListener("input", (event) => {
@@ -117,6 +158,14 @@ async function init() {
 
   els.actionSelect.addEventListener("change", (event) => {
     void writeSync({ [STORAGE_KEYS.hidingAction]: event.target.value });
+  });
+
+  els.fontScaleSelect.addEventListener("change", (event) => {
+    const scale = event.target.value;
+    // Applied locally too, so the change is visible before the storage write
+    // resolves. The content script picks it up through onSettingsChanged.
+    applyFontScale(scale);
+    void writeSync({ [STORAGE_KEYS.fontScale]: scale });
   });
 
   els.debugLogging.addEventListener("change", (event) => {

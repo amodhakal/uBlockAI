@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "name": "uBlockAI",
   "short_name": "uBlockAI",
-  "description": "Blocks AI-generated misinformation in social media feeds.",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
   "permissions": ["storage", "alarms"],
   "background": {
     "service_worker": "background.js",

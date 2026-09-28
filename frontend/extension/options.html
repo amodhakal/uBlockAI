@@ -7,16 +7,21 @@
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
+    <!--
+      English is written inline as well as declared in _locales/en/messages.json.
+      The inline text is the fallback when the catalogue does not load, and it is
+      the context a translator needs. See src/lib/i18n.js.
+    -->
     <main>
-      <h1>uBlockAI settings</h1>
-      <p class="lede">
+      <h1 data-i18n="optionsTitle">uBlockAI settings</h1>
+      <p class="lede" data-i18n="optionsLede">
         Point the extension at your own backend to self-host, or use the hosted service.
       </p>
 
       <form id="optionsForm" novalidate>
         <div class="field">
           <div class="field-label">
-            <label for="backendUrl">Backend URL</label>
+            <label for="backendUrl" data-i18n="optionsBackendUrl">Backend URL</label>
           </div>
           <input
             type="url"
@@ -27,15 +32,22 @@
             autocomplete="off"
             aria-describedby="backendUrlHelp"
           />
-          <p class="field-help" id="backendUrlHelp">
-            Hosted default: <span id="backendUrlDefault"></span>. Use http only for
-            <code>localhost</code>.
+          <!--
+            Plain text on purpose: applyTranslations writes with textContent, so
+            nested markup here would be destroyed the moment a translation
+            resolves. The hosted default is interpolated into
+            optionsBackendUrlHelp by options.js rather than hardcoded, so a
+            change to the default cannot leave this quoting a stale origin.
+          -->
+          <p class="field-help" id="backendUrlHelp" data-i18n="optionsBackendUrlHelp">
+            Hosted default: https://hack-ncstate-2026.onrender.com. Use http only for
+            localhost.
           </p>
         </div>
 
         <div class="field">
           <div class="field-label">
-            <label for="apiKey">API key</label>
+            <label for="apiKey" data-i18n="optionsApiKey">API key</label>
           </div>
           <input
             type="password"
@@ -45,20 +57,37 @@
             spellcheck="false"
             aria-describedby="apiKeyHelp"
           />
-          <p class="field-help" id="apiKeyHelp">
+          <p class="field-help" id="apiKeyHelp" data-i18n="optionsApiKeyHelp">
             Stored on this device only and never synced to your Google account. Leave
             blank if your backend does not require one.
           </p>
         </div>
 
+        <div class="field">
+          <div class="field-label">
+            <label for="fontScale" data-i18n="optionsTextSize">Text size</label>
+          </div>
+          <select id="fontScale" aria-describedby="fontScaleHelp"></select>
+          <p class="field-help" id="fontScaleHelp" data-i18n="optionsTextSizeHelp">
+            Larger text is easier to read. Applies to the popup, this page and the warning
+            shown over a hidden post.
+          </p>
+        </div>
+
         <div class="actions">
-          <button type="submit" id="save" class="primary">Save</button>
-          <button type="button" id="testConnection">Test connection</button>
-          <button type="button" id="reset" class="quiet">Reset to defaults</button>
+          <button type="submit" id="save" class="primary" data-i18n="optionsSave">
+            Save
+          </button>
+          <button type="button" id="testConnection" data-i18n="optionsTestConnection">
+            Test connection
+          </button>
+          <button type="button" id="reset" class="quiet" data-i18n="optionsReset">
+            Reset to defaults
+          </button>
         </div>
 
         <p id="status" class="status" role="status" aria-live="polite"></p>
-        <p id="error" class="error" role="alert"></p>
+        <p id="error" class="error" role="alert" aria-live="assertive"></p>
       </form>
     </main>
 

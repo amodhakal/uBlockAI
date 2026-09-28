@@ -1,0 +1,351 @@
+{
+  "extensionName": {
+    "message": "uBlockAI",
+    "description": "Product name. Not translated."
+  },
+  "extensionDescription": {
+    "message": "Blocks AI-generated misinformation in social media feeds.",
+    "description": "Chrome Web Store listing description."
+  },
+
+  "popupSubtitle": {
+    "message": "Hides AI-generated misinformation in your feed",
+    "description": "Popup subtitle under the product name."
+  },
+  "popupUnsupportedHeading": {
+    "message": "Not on a supported site",
+    "description": "Popup heading shown when the active tab is not a supported site."
+  },
+  "popupUnsupportedBody": {
+    "message": "Open Instagram.com or Threads.net to analyse posts.",
+    "description": "Popup body shown when the active tab is not a supported site."
+  },
+  "popupUnsupportedDetail": {
+    "message": "$BRAND$ analyses posts on Instagram and Threads. Open Instagram.com or Threads.net to use it, or change the threshold settings from the extension options page.",
+    "description": "Longer popup explanation, shown in place of the short body when off-site. $BRAND$ is the product name.",
+    "placeholders": {
+      "BRAND": {
+        "content": "$1",
+        "example": "uBlockAI"
+      }
+    }
+  },
+  "popupStatHidden": {
+    "message": "Hidden",
+    "description": "Popup statistic label: posts hidden."
+  },
+  "popupStatAnalyzed": {
+    "message": "Analysed",
+    "description": "Popup statistic label: posts analysed."
+  },
+  "popupThresholdAi": {
+    "message": "AI-generated risk threshold",
+    "description": "Popup slider label."
+  },
+  "popupThresholdNews": {
+    "message": "Misinformation risk threshold",
+    "description": "Popup slider label."
+  },
+  "popupThresholdHelp": {
+    "message": "Lower hides more content",
+    "description": "Help text under both threshold sliders."
+  },
+  "popupHidingAction": {
+    "message": "When content is hidden",
+    "description": "Popup select label."
+  },
+  "popupHidingActionHelp": {
+    "message": "Blurring keeps the image recognisable; removing hides it entirely.",
+    "description": "Help text under the hiding action select."
+  },
+  "popupActionPlaceholder": {
+    "message": "Replace with a warning",
+    "description": "Hiding action: replace the post with a warning panel."
+  },
+  "popupActionBlur": {
+    "message": "Blur the image",
+    "description": "Hiding action: keep the post but blur it."
+  },
+  "popupActionRemove": {
+    "message": "Remove it from the feed",
+    "description": "Hiding action: remove the post from the feed."
+  },
+  "popupDebugLogging": {
+    "message": "Log diagnostics",
+    "description": "Popup checkbox label."
+  },
+  "popupDebugLoggingHelp": {
+    "message": "Off by default. Captions and API keys are redacted even when on.",
+    "description": "Help text under the diagnostics checkbox."
+  },
+  "popupTextSize": {
+    "message": "Text size",
+    "description": "Popup select label for the senior-friendly font scale."
+  },
+  "popupTextSizeHelp": {
+    "message": "Makes text larger in the popup, the settings page and the warning shown over a hidden post.",
+    "description": "Help text under the text size select."
+  },
+  "fontScaleSmall": {
+    "message": "Normal",
+    "description": "Font scale option: the default size."
+  },
+  "fontScaleMedium": {
+    "message": "Large",
+    "description": "Font scale option: 1.25x."
+  },
+  "fontScaleLarge": {
+    "message": "Largest",
+    "description": "Font scale option: 1.5x."
+  },
+  "popupOptionsLink": {
+    "message": "Advanced settings",
+    "description": "Popup link to the options page."
+  },
+
+  "optionsTitle": {
+    "message": "uBlockAI settings",
+    "description": "Options page heading and document title."
+  },
+  "optionsLede": {
+    "message": "Point the extension at your own backend to self-host, or use the hosted service.",
+    "description": "Options page introduction."
+  },
+  "optionsBackendUrl": {
+    "message": "Backend URL",
+    "description": "Options page field label."
+  },
+  "optionsBackendUrlHelp": {
+    "message": "Hosted default: $URL$. Use http only for localhost.",
+    "description": "Options page help text. $URL$ is the hosted default backend origin.",
+    "placeholders": {
+      "URL": {
+        "content": "$1",
+        "example": "https://hack-ncstate-2026.onrender.com"
+      }
+    }
+  },
+  "optionsApiKey": {
+    "message": "API key",
+    "description": "Options page field label."
+  },
+  "optionsApiKeyHelp": {
+    "message": "Stored on this device only and never synced to your Google account. Leave blank if your backend does not require one.",
+    "description": "Options page help text for the API key field."
+  },
+  "optionsTextSize": {
+    "message": "Text size",
+    "description": "Options page select label for the senior-friendly font scale."
+  },
+  "optionsTextSizeHelp": {
+    "message": "Larger text is easier to read. Applies to the popup, this page and the warning shown over a hidden post.",
+    "description": "Help text under the options page text size select."
+  },
+  "optionsSave": {
+    "message": "Save",
+    "description": "Options page submit button."
+  },
+  "optionsTestConnection": {
+    "message": "Test connection",
+    "description": "Options page button that pings the backend health endpoint."
+  },
+  "optionsReset": {
+    "message": "Reset to defaults",
+    "description": "Options page button that clears the backend URL and API key."
+  },
+  "optionsStatusSaved": {
+    "message": "Saved.",
+    "description": "Confirmation shown after a successful save."
+  },
+  "optionsStatusReset": {
+    "message": "Reset to defaults.",
+    "description": "Confirmation shown after a reset."
+  },
+  "optionsStatusTesting": {
+    "message": "Testing…",
+    "description": "Status shown while the connection test is in flight."
+  },
+  "optionsStatusConnected": {
+    "message": "Connected. Backend is healthy (model $MODEL$).",
+    "description": "Successful connection test. $MODEL$ is the backend's model name.",
+    "placeholders": {
+      "MODEL": {
+        "content": "$1",
+        "example": "gpt-4o"
+      }
+    }
+  },
+  "optionsStatusDegraded": {
+    "message": "Reachable but degraded: $CHECKS$",
+    "description": "Connection test reached the backend but it reported degraded. $CHECKS$ is the raw checks object.",
+    "placeholders": {
+      "CHECKS": {
+        "content": "$1",
+        "example": "{\"api_key_configured\":false}"
+      }
+    }
+  },
+  "optionsErrorEmptyUrl": {
+    "message": "Enter a backend URL.",
+    "description": "Validation error: the backend URL field is blank."
+  },
+  "optionsErrorInvalidUrl": {
+    "message": "That is not a valid URL.",
+    "description": "Validation error: the backend URL could not be parsed."
+  },
+  "optionsErrorScheme": {
+    "message": "Only http and https URLs are supported.",
+    "description": "Validation error: the backend URL uses another scheme."
+  },
+  "optionsErrorInsecureRemote": {
+    "message": "http is only allowed for localhost; use https for a remote backend.",
+    "description": "Validation error: a non-loopback backend URL used http."
+  },
+  "optionsErrorPath": {
+    "message": "The backend URL must not include a path.",
+    "description": "Validation error: the backend URL has a path component."
+  },
+  "optionsErrorQuery": {
+    "message": "The backend URL must not include a query or fragment.",
+    "description": "Validation error: the backend URL has a query string or fragment."
+  },
+  "optionsErrorPermission": {
+    "message": "Permission to reach $URL$ was not granted.",
+    "description": "The host permission request was declined. $URL$ is the backend origin.",
+    "placeholders": {
+      "URL": {
+        "content": "$1",
+        "example": "https://backend.example"
+      }
+    }
+  },
+  "optionsErrorSaveUrl": {
+    "message": "Could not save the backend URL: $ERROR$",
+    "description": "Storage rejected the backend URL write. $ERROR$ is the storage error.",
+    "placeholders": {
+      "ERROR": {
+        "content": "$1",
+        "example": "QUOTA_BYTES_PER_ITEM quota exceeded"
+      }
+    }
+  },
+  "optionsErrorSaveKey": {
+    "message": "Could not save the API key: $ERROR$",
+    "description": "Storage rejected the API key write. $ERROR$ is the storage error.",
+    "placeholders": {
+      "ERROR": {
+        "content": "$1",
+        "example": "QUOTA_BYTES_PER_ITEM quota exceeded"
+      }
+    }
+  },
+  "optionsErrorRejected": {
+    "message": "Reachable, but the backend rejected the request. Check the API key.",
+    "description": "Connection test got 401 or 403."
+  },
+  "optionsErrorHttpStatus": {
+    "message": "Reachable, but returned HTTP $STATUS$.",
+    "description": "Connection test got a non-OK HTTP status. $STATUS$ is the status code.",
+    "placeholders": {
+      "STATUS": {
+        "content": "$1",
+        "example": "503"
+      }
+    }
+  },
+  "optionsErrorTimeout": {
+    "message": "No response within 8 seconds.",
+    "description": "Connection test aborted after the 8 second budget."
+  },
+  "optionsErrorUnreachable": {
+    "message": "Could not reach the backend: $ERROR$",
+    "description": "Connection test failed at the network layer. $ERROR$ is the thrown error.",
+    "placeholders": {
+      "ERROR": {
+        "content": "$1",
+        "example": "Failed to fetch"
+      }
+    }
+  },
+
+  "placeholderPanelLabel": {
+    "message": "Content hidden by $BRAND$ as possible misinformation",
+    "description": "ARIA label on the warning panel shown over a hidden post. $BRAND$ is the product name.",
+    "placeholders": {
+      "BRAND": {
+        "content": "$1",
+        "example": "uBlockAI"
+      }
+    }
+  },
+  "placeholderHeading": {
+    "message": "Flagged as possible misinformation",
+    "description": "Heading of the warning panel when the model gave no short reason."
+  },
+  "placeholderBrandLine": {
+    "message": "Hidden by $BRAND$",
+    "description": "Attribution line in the warning panel. $BRAND$ is the product name.",
+    "placeholders": {
+      "BRAND": {
+        "content": "$1",
+        "example": "uBlockAI"
+      }
+    }
+  },
+  "placeholderScoreAi": {
+    "message": "AI-generated risk: $PERCENT$%",
+    "description": "AI-generated risk score readout. $PERCENT$ is an integer 0-100.",
+    "placeholders": {
+      "PERCENT": {
+        "content": "$1",
+        "example": "30"
+      }
+    }
+  },
+  "placeholderScoreNews": {
+    "message": "Misinformation risk: $PERCENT$%",
+    "description": "Misinformation risk score readout. $PERCENT$ is an integer 0-100.",
+    "placeholders": {
+      "PERCENT": {
+        "content": "$1",
+        "example": "20"
+      }
+    }
+  },
+  "placeholderShowAnyway": {
+    "message": "Show post anyway",
+    "description": "Button that reveals a hidden post."
+  },
+  "placeholderReportMistake": {
+    "message": "Report mistake",
+    "description": "Button that reports a false positive."
+  },
+  "placeholderReported": {
+    "message": "Reported",
+    "description": "Button label once a false positive has been reported."
+  },
+  "placeholderCloseDetail": {
+    "message": "Close details",
+    "description": "Button that closes the warning panel's expanded detail view."
+  },
+  "placeholderDetailLabel": {
+    "message": "Details about why $BRAND$ hid this post",
+    "description": "ARIA label for the detail view inside the warning panel. $BRAND$ is the product name.",
+    "placeholders": {
+      "BRAND": {
+        "content": "$1",
+        "example": "uBlockAI"
+      }
+    }
+  },
+  "placeholderShownLive": {
+    "message": "$BRAND$ showed this post again at your request.",
+    "description": "Announced in a live region when a hidden post is revealed. $BRAND$ is the product name.",
+    "placeholders": {
+      "BRAND": {
+        "content": "$1",
+        "example": "uBlockAI"
+      }
+    }
+  }
+}
