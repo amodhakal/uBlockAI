@@ -21,7 +21,28 @@ _NUM_RE = re.compile(
     re.VERBOSE,
 )
 
-_RANGE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+# Range syntax, most common first. "between X and Y" is handled separately
+# because a bare "X and Y" is usually a list of unrelated figures rather than a
+# range, so the word "between" is required before "and" is treated as a bound.
+_RANGE_RES = (
+    re.compile(
+        r"(\d+(?:\.\d+)?)\s*(?:-|to|through|and)\s*(\d+(?:\.\d+)?)", re.IGNORECASE
+    ),
+    re.compile(r"\bbetween\s+(\d+(?:\.\d+)?)\s+and\s+(\d+(?:\.\d+)?)\b", re.IGNORECASE),
+)
+
+
+def _find_ranges(claim: str) -> list[tuple[str, str]]:
+    matches: list[tuple[str, str]] = []
+    seen_spans: set[tuple[int, int]] = set()
+    for pattern in _RANGE_RES:
+        for match in pattern.finditer(claim):
+            if match.span() in seen_spans:
+                continue
+            seen_spans.add(match.span())
+            matches.append((match.group(1), match.group(2)))
+    return matches
+
 
 # Each entry is (flag name, phrase). Matching is done on whole words, because
 # substring matching produced false positives: "100%" fired inside "1100%".
@@ -164,12 +185,16 @@ def numeric_verify(
     # Detect suspicious ranges like "90-95%" / "10 to 12" and actually score
     # them. Previously the ranges were computed and then discarded unused.
     ranges: List[tuple[float, float]] = []
-    for a, b in _RANGE_RE.findall(claim):
+    for a, b in _find_ranges(claim):
         try:
             fa, fb = float(a), float(b)
         except ValueError:
             continue
         lo, hi = min(fa, fb), max(fa, fb)
+        # "between 80 and 90" matches both range patterns; count the pair once
+        # so it is not stored or scored twice.
+        if (lo, hi) in ranges:
+            continue
         ranges.append((lo, hi))
         if hi - lo > _IMPLAUSIBLE_RANGE_SPAN:
             flags.append("implausible_range_width")

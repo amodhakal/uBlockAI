@@ -43,9 +43,20 @@ _configured = False
 
 
 def redact(value: Any, _depth: int = 0) -> Any:
-    """Recursively redact sensitive keys and bound value sizes."""
+    """Recursively redact sensitive keys and bound value sizes.
+
+    Numbers, booleans and None are returned unchanged. Coercing them to str
+    would break printf-style format specs in log calls, so a line like
+    ``logger.info("score=%.2f", score)`` would raise at format time.
+    """
     if _depth > 6:
         return REDACTION_PLACEHOLDER
+
+    if isinstance(value, bool) or value is None:
+        return value
+
+    if isinstance(value, (int, float)):
+        return value
 
     if isinstance(value, dict):
         out: Dict[str, Any] = {}
