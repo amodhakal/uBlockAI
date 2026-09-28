@@ -32,8 +32,8 @@ jobs:
 
       - name: Install Tesseract
         # pytesseract shells out to the tesseract binary. The unit tests stub
-        # it, but installing it keeps the environment honest for anyone who
-        # runs the OCR path in the logs.
+        # it out, but installing it keeps the environment honest for anyone who
+        # exercises the OCR path from the logs.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends tesseract-ocr
@@ -43,10 +43,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Verify the lockfile is consistent
-        run: |
-          pip install pip-audit==2.9.0
-          pip check
+      - name: Dependency consistency
+        run: pip check
 
       - name: Ruff lint
         run: ruff check .
@@ -59,13 +57,15 @@ jobs:
 
       - name: Pytest
         env:
-          # A syntactically valid but non-functional key: the tests never call
-          # the provider, they only need configuration to resolve.
+          # Syntactically valid but non-functional. The tests never reach the
+          # provider, they only need configuration to resolve.
           OPENAI_API_KEY: sk-test-not-a-real-key
-        run: pytest --junitxml=pytest-report.xml --cov=app --cov-report=term-missing
+        run: pytest --junitxml=pytest-report.xml
 
       - name: Dependency audit
-        run: pip-audit --requirement requirements.txt --strict
+        run: |
+          pip install pip-audit==2.9.0
+          pip-audit --requirement requirements.txt --strict
 
       - name: Upload test report
         if: always()
@@ -78,16 +78,32 @@ jobs:
   extension:
     name: Extension (lint, format)
     runs-on: ubuntu-latest
-    # The extension lint toolchain lands in a later layer. Skip this job rather
-    # than fail until then.
-    if: ${{ hashFiles('frontend/extension/package.json') != '' }}
-    defaults:
-      run:
-        working-directory: frontend/extension
     steps:
+      # The extension lint toolchain lands in a later layer. Detect it here and
+      # skip the remaining steps rather than failing.
+      #
+      # Note: hashFiles() is not permitted in a job-level `if`, which makes
+      # GitHub reject the whole workflow before any job is scheduled. A step
+      # that exports an output is used instead.
       - uses: actions/checkout@v4
 
+      - name: Detect extension toolchain
+        id: detect
+        run: |
+          if [ -f frontend/extension/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report
+        run: |
+          if [ "${{ steps.detect.outputs.present }}" != "true" ]; then
+            echo "frontend/extension/package.json not present; skipping extension checks"
+          fi
+
       - name: Set up Node
+        if: steps.detect.outputs.present == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -95,15 +111,23 @@ jobs:
           cache-dependency-path: frontend/extension/package.json
 
       - name: Install dependencies
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend/extension
         run: npm ci
 
       - name: ESLint
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend/extension
         run: npm run lint
 
       - name: Prettier check
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend/extension
         run: npm run format:check
 
       - name: Syntax check
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend/extension
         run: |
           node --check background.js
           node --check popup.js
@@ -112,6 +136,9 @@ jobs:
     name: Backend boots and reports healthy
     runs-on: ubuntu-latest
     needs: backend
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
@@ -122,18 +149,17 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
 
       - name: Install dependencies
-        working-directory: backend
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
       - name: Boot the app and check /api/health
-        working-directory: backend
         env:
           OPENAI_API_KEY: sk-test-not-a-real-key
         run: |
           python - <<'PY'
           import app.main as main
+
           client = main.app.test_client()
           response = client.get("/api/health")
           assert response.status_code == 200, response.get_data(as_text=True)
