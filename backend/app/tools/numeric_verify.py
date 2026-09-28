@@ -115,7 +115,9 @@ def _score(
 
 
 @tool
-def numeric_verify(claim_text: str, expected_result: Optional[float] = None) -> Dict[str, Any]:
+def numeric_verify(
+    claim_text: str, expected_result: Optional[float] = None
+) -> Dict[str, Any]:
     """
     Verify numeric claims by checking if calculations are correct and identifying suspicious numeric patterns.
 
@@ -180,14 +182,16 @@ def numeric_verify(claim_text: str, expected_result: Optional[float] = None) -> 
 
     # Compare the stated figure against the caller's expected value.
     expected_mismatch = False
-    if inp.expected_result is not None:
+    expected = inp.expected_result
+    if expected is not None:
         numbers = [v for v in (_safe_float(s) for s in extracted) if v is not None]
         if numbers:
-            closest = min(numbers, key=lambda v: abs(v - inp.expected_result))
-            computed["expected_result"] = inp.expected_result
+            closest = min(numbers, key=lambda v: abs(v - expected))
+            computed["expected_result"] = expected
             computed["closest_claim_value"] = closest
-            computed["delta"] = abs(closest - inp.expected_result)
-            if abs(closest - inp.expected_result) > 1e-9:
+            delta = abs(closest - expected)
+            computed["delta"] = delta
+            if delta > 1e-9:
                 expected_mismatch = True
                 flags.append("expected_result_mismatch")
 
@@ -211,9 +215,7 @@ def numeric_verify(claim_text: str, expected_result: Optional[float] = None) -> 
             score=_score(
                 flags,
                 has_out_of_range=has_out_of_range,
-                has_implausible_range=any(
-                    f.startswith("implausible") for f in flags
-                ),
+                has_implausible_range=any(f.startswith("implausible") for f in flags),
                 expected_mismatch=expected_mismatch,
             ),
         ),

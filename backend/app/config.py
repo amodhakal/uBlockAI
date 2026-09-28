@@ -42,9 +42,7 @@ def _read_int(name: str, default: int, *, minimum: int = 1) -> int:
     try:
         value = int(raw)
     except ValueError as exc:
-        raise ConfigurationError(
-            f"{name} must be an integer, got {raw!r}"
-        ) from exc
+        raise ConfigurationError(f"{name} must be an integer, got {raw!r}") from exc
     if value < minimum:
         raise ConfigurationError(f"{name} must be >= {minimum}, got {value}")
     return value
@@ -57,9 +55,7 @@ def _read_float(name: str, default: float) -> float:
     try:
         return float(raw)
     except ValueError as exc:
-        raise ConfigurationError(
-            f"{name} must be a number, got {raw!r}"
-        ) from exc
+        raise ConfigurationError(f"{name} must be a number, got {raw!r}") from exc
 
 
 def _read_bool(name: str, default: bool) -> bool:
@@ -111,9 +107,7 @@ def get_settings() -> Settings:
         openai_temperature=_read_float("OPENAI_TEMPERATURE", 0.0),
         brave_api_key=(os.getenv("BRAVE_API_KEY") or "").strip() or None,
         debug=_read_bool("DEBUG", False),
-        default_ocr_profile=(
-            os.getenv("OCR_PROFILE") or DEFAULT_OCR_PROFILE
-        ).strip(),
+        default_ocr_profile=(os.getenv("OCR_PROFILE") or DEFAULT_OCR_PROFILE).strip(),
         max_images=_read_int("MAX_IMAGES", DEFAULT_MAX_IMAGES),
         feedback_dir=APP_DIR / "feedback",
         allowed_origins=allowed_origins,

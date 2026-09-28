@@ -52,8 +52,18 @@ def _registrable_domain(host: str) -> str:
 
     # Two-label public suffixes under which registrations happen directly.
     two_label_suffixes = {
-        "co.uk", "org.uk", "ac.uk", "gov.uk", "co.jp", "com.au",
-        "co.nz", "co.za", "com.br", "co.in", "com.mx", "com.sg",
+        "co.uk",
+        "org.uk",
+        "ac.uk",
+        "gov.uk",
+        "co.jp",
+        "com.au",
+        "co.nz",
+        "co.za",
+        "com.br",
+        "co.in",
+        "com.mx",
+        "com.sg",
     }
     if ".".join(labels[-2:]) in two_label_suffixes:
         return ".".join(labels[-3:])
@@ -71,7 +81,7 @@ def _host_matches_allowlist(host: str, suffixes: Iterable[str]) -> bool:
         if host.endswith("." + suffix):
             return True
         # Compare on the registrable domain so that "notinstagram.com", whose
-            # registrable domain is itself, does not match "instagram.com",
+        # registrable domain is itself, does not match "instagram.com",
         # while "cdninstagram.com" does.
         if _registrable_domain(host) == suffix:
             return True
@@ -79,18 +89,25 @@ def _host_matches_allowlist(host: str, suffixes: Iterable[str]) -> bool:
 
 
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    return bool(
+    if (
         ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
-        # IPv4-mapped IPv6 addresses such as ::ffff:127.0.0.1 bypass naive
-        # checks if only the v4 properties are inspected.
-        or getattr(ip, "ipv4_mapped", None) is not None
-        and _is_blocked_ip(ip.ipv4_mapped)
-    )
+    ):
+        return True
+
+    # IPv4-mapped IPv6 addresses such as ::ffff:127.0.0.1 report IPv6
+    # properties, which classify them as public, so the embedded v4 address has
+    # to be checked separately.
+    if isinstance(ip, ipaddress.IPv6Address):
+        mapped = ip.ipv4_mapped
+        if mapped is not None:
+            return _is_blocked_ip(mapped)
+
+    return False
 
 
 def _hostname_is_blocked(host: str) -> bool:

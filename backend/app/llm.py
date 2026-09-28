@@ -15,6 +15,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from app.config import get_settings
 
@@ -26,7 +27,9 @@ def _build_chat_model(
     return ChatOpenAI(
         model=model,
         temperature=temperature,
-        api_key=api_key,
+        # SecretStr so the key is not rendered by repr() or logged if the
+        # client object is ever printed.
+        api_key=SecretStr(api_key),
         timeout=timeout,
         max_retries=2,
     )

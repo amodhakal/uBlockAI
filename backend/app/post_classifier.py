@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 
 import pytesseract
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from PIL import Image, ImageEnhance, ImageOps
 
 from app.url_safety import UnsafeUrlError, validate_url
@@ -79,11 +79,21 @@ def _extract_image_urls(post_url: str, max_images: int = 3) -> List[str]:
 
     for attr in [("property", "og:image"), ("name", "twitter:image")]:
         tag = soup.find("meta", attrs={attr[0]: attr[1]})
-        if tag and tag.get("content"):
-            candidates.append(urljoin(post_url, tag["content"]))
+        # BeautifulSoup types a find() result as Tag | NavigableString, and an
+        # attribute value as str | list[str]. Narrow rather than cast, so a
+        # malformed document cannot put a list into urljoin.
+        if not isinstance(tag, Tag):
+            continue
+        content = tag.get("content")
+        if isinstance(content, str) and content.strip():
+            candidates.append(urljoin(post_url, content.strip()))
 
     for img in soup.find_all("img", src=True):
-        candidates.append(urljoin(post_url, img["src"]))
+        if not isinstance(img, Tag):
+            continue
+        src = img.get("src")
+        if isinstance(src, str) and src.strip():
+            candidates.append(urljoin(post_url, src.strip()))
 
     seen = set()
     image_urls: List[str] = []
@@ -160,7 +170,9 @@ def _is_grayscale(image: Image.Image) -> bool:
     return len(set(extrema)) == 1
 
 
-def _build_ocr_variants(image: Image.Image, ocr_profile: str) -> List[tuple[str, Image.Image]]:
+def _build_ocr_variants(
+    image: Image.Image, ocr_profile: str
+) -> List[tuple[str, Image.Image]]:
     """Return the (name, image) variants actually worth running.
 
     The accurate profile previously ran nine variants, several of which were
@@ -181,7 +193,10 @@ def _build_ocr_variants(image: Image.Image, ocr_profile: str) -> List[tuple[str,
     base = _base_preprocess(image)
 
     if ocr_profile == "fast":
-        return [("autocontrast", base["autocontrast"]), ("thresholded", base["thresholded"])]
+        return [
+            ("autocontrast", base["autocontrast"]),
+            ("thresholded", base["thresholded"]),
+        ]
 
     variants: List[tuple[str, Image.Image]] = [
         ("autocontrast", base["autocontrast"]),
@@ -243,7 +258,9 @@ def _run_ocr(processed: Image.Image, psm_mode: str) -> str:
     return pytesseract.image_to_string(processed, config=psm_mode).strip()
 
 
-def _ocr_grid(image: Image.Image, ocr_profile: str) -> tuple[list[tuple[int, str]], float]:
+def _ocr_grid(
+    image: Image.Image, ocr_profile: str
+) -> tuple[list[tuple[int, str]], float]:
     """Run every (variant, psm) combination, in parallel.
 
     Tesseract runs as a subprocess, so the work happens outside the interpreter

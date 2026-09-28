@@ -52,6 +52,7 @@ def _get_llm():
 # DuckDuckGo HTML fallback
 # --------------------------------------------------------------------------
 
+
 def parse_ddg_html(html: str, top_k: int = 5) -> List[Dict[str, str]]:
     """Parse DuckDuckGo's HTML endpoint into result dicts.
 
@@ -69,7 +70,9 @@ def parse_ddg_html(html: str, top_k: int = 5) -> List[Dict[str, str]]:
         if anchor is None:
             continue
         href = anchor.get("href")
-        if not href:
+        # BeautifulSoup types an attribute value as str | list[str]; only a
+        # plain string can be a URL.
+        if not isinstance(href, str) or not href.strip():
             continue
 
         url = _unwrap_ddg_redirect(href)
@@ -78,9 +81,7 @@ def parse_ddg_html(html: str, top_k: int = 5) -> List[Dict[str, str]]:
             ".result__snippet, .result__excerpt, div.result__excerpt"
         )
         snippet = (
-            _clean_text(snippet_node.get_text(" ", strip=True))
-            if snippet_node
-            else ""
+            _clean_text(snippet_node.get_text(" ", strip=True)) if snippet_node else ""
         )
 
         if not url or not title:
@@ -127,6 +128,7 @@ async def ddg_search(query: str, top_k: int = 5) -> List[Dict[str, str]]:
 # Brave (primary provider)
 # --------------------------------------------------------------------------
 
+
 async def brave_search(query: str, top_k: int = 5) -> List[Dict[str, str]]:
     """Query the Brave Search API, raising on throttling instead of hiding it."""
     settings = get_settings()
@@ -138,12 +140,14 @@ async def brave_search(query: str, top_k: int = 5) -> List[Dict[str, str]]:
         "X-Subscription-Token": settings.brave_api_key,
         "User-Agent": _UA,
     }
-    params = {"q": query, "count": min(top_k, 10), "safesearch": "moderate"}
+    params: dict[str, str | int] = {
+        "q": query,
+        "count": min(top_k, 10),
+        "safesearch": "moderate",
+    }
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-        response = await client.get(
-            BRAVE_SEARCH_URL, headers=headers, params=params
-        )
+        response = await client.get(BRAVE_SEARCH_URL, headers=headers, params=params)
 
     if response.status_code == 429:
         raise SearchRateLimitedError("Brave Search rate-limited the request")
@@ -236,6 +240,7 @@ def last_search_state() -> Dict[str, Any]:
 # --------------------------------------------------------------------------
 # LLM planning / selection
 # --------------------------------------------------------------------------
+
 
 async def _llm_plan_selection(
     claim_text: str, prior_queries: List[str], search_results: List[Dict]

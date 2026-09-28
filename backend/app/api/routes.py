@@ -16,14 +16,14 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from flask import Blueprint, abort, jsonify, request
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, HttpUrl, ValidationError
 from werkzeug.exceptions import HTTPException
 
 from app.agents.langchain_agent import AgentOutputError, LangChainAgent
 from app.config import get_settings
 from app.feedback_store import append_reports
 from app.post_classifier import extract_post_text_for_llm
-from app.schemas.agent_io import ClaimInput
+from app.schemas.agent_io import AgentContext, ClaimInput
 
 logger = logging.getLogger(__name__)
 
@@ -167,14 +167,17 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
             max_images=payload.max_images,
         )
         llm_input_text = ocr_res.get("llm-input-text", "") or ""
+        # AgentContext.urls is typed HttpUrl, so build it through the model
+        # rather than handing Pydantic a bare list of strings to coerce.
+        context = AgentContext(
+            caption=payload.caption or "",
+            ocr_text=llm_input_text,
+            metadata=payload.metadata or {},
+        )
+        context.urls = [HttpUrl(payload.url)]
         claim_input = ClaimInput(
             claims=build_claims(payload, llm_input_text),
-            context={
-                "caption": payload.caption or "",
-                "ocr_text": llm_input_text,
-                "urls": [payload.url],
-                "metadata": payload.metadata or {},
-            },
+            context=context,
             request_id=request_id,
         )
         result = await agent_runner.run(claim_input)
@@ -211,9 +214,7 @@ async def submit_feedback(payload: FeedbackRequest):
             get_settings().feedback_dir,
             [report.model_dump() for report in payload.reports],
         )
-        return jsonify(
-            {"received": len(payload.reports), "total_stored": total}
-        )
+        return jsonify({"received": len(payload.reports), "total_stored": total})
     except ValidationError as exc:
         logger.warning("feedback validation error: %s", exc)
         abort(400, description=GENERIC_VALIDATION_ERROR)

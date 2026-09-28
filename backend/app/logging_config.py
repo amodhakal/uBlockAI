@@ -111,7 +111,9 @@ def configure_logging(force: bool = False) -> None:
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(
-        JsonFormatter() if as_json else logging.Formatter("%(levelname)s %(name)s: %(message)s")
+        JsonFormatter()
+        if as_json
+        else logging.Formatter("%(levelname)s %(name)s: %(message)s")
     )
     handler.addFilter(RedactingFilter())
 

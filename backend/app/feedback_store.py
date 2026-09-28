@@ -76,9 +76,7 @@ def _read_reports(path: Path) -> List[Dict[str, Any]]:
 
 
 def _serialize(reports: List[Dict[str, Any]]) -> str:
-    return "".join(
-        json.dumps(report, ensure_ascii=False) + "\n" for report in reports
-    )
+    return "".join(json.dumps(report, ensure_ascii=False) + "\n" for report in reports)
 
 
 def append_reports(

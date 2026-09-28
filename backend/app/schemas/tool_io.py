@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Annotated, Any, Dict, List, Optional
-from pydantic import BaseModel, Field, HttpUrl, conint, confloat
+from pydantic import BaseModel, Field, HttpUrl
+
 
 class WebSearchInput(BaseModel):
     claim_text: str = Field(..., min_length=1)
@@ -9,11 +10,13 @@ class WebSearchInput(BaseModel):
     top_k: Annotated[int, Field(ge=1, le=10)] = 5
     prior_queries: List[str] = Field(default_factory=list)
 
+
 class WebSearchResult(BaseModel):
     title: Optional[str] = None
     url: HttpUrl
     # Was misspelled "snipped", so the snippet never round-tripped.
     snippet: Optional[str] = None
+
 
 class WebSearchOutput(BaseModel):
     claim_text: str
@@ -24,6 +27,7 @@ class WebSearchOutput(BaseModel):
     # callers must not treat a 429 as evidence that nothing exists.
     rate_limited: bool = False
 
+
 class CredibilityItem(BaseModel):
     url: HttpUrl
     domain: str
@@ -31,21 +35,32 @@ class CredibilityItem(BaseModel):
     rationale: Optional[str] = None
     signals: List[str] = Field(default_factory=list)
 
+
 class CredibilityOutput(BaseModel):
     items: List[CredibilityItem] = Field(default_factory=list)
+
 
 class NumericVerifyInput(BaseModel):
     claim_text: str = Field(..., min_length=1)
     expected_result: Optional[float] = None
 
+
 class NumericFinding(BaseModel):
-    extracted_numbers: List[str] = Field(default_factory=list, description="Raw numeric strings found")
-    flags: List[str] = Field(default_factory=list, description="Issues found (unit mismatch, impossible scale, etc.).")
-    computed_checks: Dict[str, Any] = Field(default_factory=dict, description="Any computed values used for verification.")
+    extracted_numbers: List[str] = Field(
+        default_factory=list, description="Raw numeric strings found"
+    )
+    flags: List[str] = Field(
+        default_factory=list,
+        description="Issues found (unit mismatch, impossible scale, etc.).",
+    )
+    computed_checks: Dict[str, Any] = Field(
+        default_factory=dict, description="Any computed values used for verification."
+    )
     score: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
         default=0.0,
         description="How suspicious the numerical component is (0=clean, 1=very suspicious).",
     )
+
 
 class NumericVerifyOutput(BaseModel):
     claim_text: str
