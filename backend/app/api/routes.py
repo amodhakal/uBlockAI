@@ -24,9 +24,17 @@ from app.agents.langchain_agent import AgentOutputError, LangChainAgent
 from app.auth import require_api_key
 from app.config import get_settings
 from app.feedback_store import append_reports
-from app.rate_limit import require_rate_limit
+from app.image_bytes import (
+    MAX_BASE64_CHARS,
+    MAX_DIMENSION,
+    MAX_INLINE_IMAGES,
+    ImageRejected,
+    decode_inline_images,
+)
 from app.post_classifier import extract_post_text_for_llm
+from app.rate_limit import require_rate_limit
 from app.schemas.agent_io import AgentContext, ClaimInput
+from app.url_safety import UnsafeUrlError
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +94,24 @@ def json_body(model: Type[T]) -> Callable[[Callable[[T], Any]], Callable[[], Any
     return decorator
 
 
+class InlineImage(BaseModel):
+    """An image supplied directly by the client rather than scraped.
+
+    Every field is client-controlled and reaches Pillow, so the checks live in
+    app.image_bytes: base64 validation, magic-byte verification against the
+    declared type, a recomputed content hash, and a pixel budget.
+    """
+
+    mime_type: str = Field(..., pattern=r"^image/(jpeg|png|webp)$")
+    data_base64: str = Field(..., max_length=MAX_BASE64_CHARS)
+    content_sha256: str = Field(..., pattern=r"^[0-9a-fA-F]{64}$")
+    width: Optional[int] = Field(default=None, ge=1, le=MAX_DIMENSION)
+    height: Optional[int] = Field(default=None, ge=1, le=MAX_DIMENSION)
+    # Provenance only. Never fetched, so it carries no SSRF risk; it is
+    # shape-validated before being placed in the agent's context.
+    source_url: Optional[str] = Field(default=None, max_length=2048)
+
+
 class AnalyzeUrlRequest(BaseModel):
     url: str = Field(..., min_length=1, description="Post URL or direct image URL")
     caption: str = Field(default="", max_length=MAX_CAPTION_CHARS)
@@ -100,6 +126,12 @@ class AnalyzeUrlRequest(BaseModel):
     # "Video and Reel posts" note in app/post_classifier.py.
     is_video: bool = False
     video_thumb: str = Field(default="", max_length=MAX_VIDEO_THUMB_CHARS)
+    # When present, these replace the scrape entirely. `images` wins over
+    # `video_thumb`: inline bytes are the more trustworthy of the two,
+    # because the client is handing over exactly what it rendered.
+    images: List[InlineImage] = Field(
+        default_factory=list, max_length=MAX_INLINE_IMAGES
+    )
 
 
 class FeedbackReport(BaseModel):
@@ -201,15 +233,20 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
     request_id = payload.request_id or "auto"
     logger.debug(
         "analysis requested request_id=%s url=%s caption_chars=%d alt_text_chars=%d "
-        "max_images=%d is_video=%s",
+        "max_images=%d inline_images=%d is_video=%s",
         request_id,
         payload.url,
         len(payload.caption or ""),
         len(payload.alt_text or ""),
         payload.max_images,
+        len(payload.images),
         payload.is_video,
     )
     try:
+        # Decoding and verification happen before the agent, off the event loop
+        # because Pillow decode is CPU-bound.
+        decoded = await asyncio.to_thread(decode_inline_images, payload.images)
+
         ocr_res = await asyncio.to_thread(
             extract_post_text_for_llm,
             post_url=payload.url,
@@ -218,7 +255,10 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
             max_images=payload.max_images,
             # Only a video post's poster is a substitute for the scrape. An
             # image post that happens to send video_thumb does not get it used.
+            # Inline bytes take precedence: the client already has the pixels,
+            # so there is nothing to fetch.
             poster_url=payload.video_thumb if payload.is_video else "",
+            images=decoded,
         )
         llm_input_text = ocr_res.get("llm-input-text", "") or ""
         # The agent scores AI-generated media, and a deepfake Reel and a
@@ -248,6 +288,14 @@ async def analyze_claims(payload: AnalyzeUrlRequest):
             result.tool_rounds,
         )
         return jsonify(result.model_dump())
+    except ImageRejected as exc:
+        # 400: the client sent something unacceptable. The message names the
+        # rule, never the payload.
+        logger.info("inline image rejected request_id=%s: %s", request_id, exc)
+        abort(400, description=f"Supplied image rejected: {exc}")
+    except UnsafeUrlError as exc:
+        logger.info("post url rejected request_id=%s: %s", request_id, exc)
+        abort(400, description=f"Post URL rejected: {exc}")
     except ValidationError as exc:
         logger.warning("analysis validation error request_id=%s: %s", request_id, exc)
         abort(400, description=GENERIC_VALIDATION_ERROR)
