@@ -2,9 +2,13 @@
 
 The compiled graph is built once per process and shared across requests, rather
 than being reconstructed on every call.
+
+Synthesis is finished in code, not in the prompt: see
+:func:`apply_credibility_weighting`.
 """
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 from langchain_openai import ChatOpenAI
@@ -13,11 +17,25 @@ from pydantic import ValidationError
 
 from app.agents.prompts import SYSTEM_PROMPT
 from app.schemas.agent_io import AgentOutput, ClaimInput
+from app.tools.credibility_tool import weight_for_tier
 from app.tools.registry import get_langchain_tools
+
+logger = logging.getLogger(__name__)
 
 # Cap on how far back we will look for the final answer, so a pathological
 # message list cannot make extraction unbounded.
 _MAX_MESSAGE_SCAN = 25
+
+# How much of the final misinformation score the model's own judgement keeps.
+# The rest comes from the credibility-weighted evidence, so a model that
+# ignored its own citations is overruled and a model that followed them is not
+# second-guessed.
+MODEL_BLEND = 0.5
+
+# Hard bound on that correction, in score points. The evidence moves the score;
+# it does not decide the verdict, and an all-low-credibility evidence set must
+# not manufacture certainty out of forum posts.
+MAX_CORRECTION = 0.15
 
 
 class AgentOutputError(RuntimeError):
@@ -128,6 +146,84 @@ def build_agent(model: Optional[ChatOpenAI] = None) -> Any:
     )
 
 
+def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
+
+
+def weighted_support(evidence: List[Any]) -> Optional[float]:
+    """Share of total source weight that supports the claim, or None.
+
+    Only rated evidence counts: an item with an unrecognized or missing
+    ``source_credibility`` has weight 0.0, so it cannot dilute the denominator
+    and inflate the result. None means "nothing was rated", which is different
+    from a support of 0.0 ("everything rated contradicts the claim") and must
+    not be treated as evidence of falsehood.
+    """
+    total = 0.0
+    supporting = 0.0
+    for item in evidence:
+        weight = weight_for_tier(getattr(item, "source_credibility", None))
+        if weight <= 0.0:
+            continue
+        total += weight
+        if getattr(item, "supporting", None) is True:
+            supporting += weight
+    if total <= 0.0:
+        return None
+    return supporting / total
+
+
+def apply_credibility_weighting(output: AgentOutput) -> AgentOutput:
+    """Recompute the misinformation score from credibility-weighted evidence.
+
+    The prompt asks the model to weight higher-credibility sources more heavily
+    and then asks it to score the claim, which leaves the arithmetic to the
+    same generation that produced the evidence it is scoring. Two runs over the
+    same sources can disagree, and a model that quietly ignored its citations
+    looks identical to one that followed them.
+
+    So the weighting is applied here. The model's score still leads
+    (``MODEL_BLEND``); the evidence contributes the rest, bounded by
+    ``MAX_CORRECTION`` so a weak evidence set can nudge the score but never
+    manufacture a verdict on its own. The result, the support share and the
+    correction are all written onto the output, and the correction is appended
+    to the reasoning chain, because a number that moved without an audit trail
+    is worse than a number that did not move.
+    """
+    support = weighted_support(output.evidence)
+    if support is None:
+        # No rated evidence: the model's score stands untouched rather than
+        # being pulled toward a default.
+        return output.model_copy(update={"credibility_weighted_support": None})
+
+    original = output.misinformation_risk_score
+    implied_risk = 1.0 - support
+    correction = _clamp(
+        (1.0 - MODEL_BLEND) * (implied_risk - original),
+        low=-MAX_CORRECTION,
+        high=MAX_CORRECTION,
+    )
+    adjusted = round(_clamp(original + correction), 4)
+
+    rated = sum(
+        1 for item in output.evidence if weight_for_tier(item.source_credibility) > 0
+    )
+    audit = (
+        f"Credibility weighting: {rated} rated source(s), "
+        f"weighted support {support:.2f}, misinformation risk "
+        f"{original:.2f} -> {adjusted:.2f}"
+    )
+    logger.info(audit)
+
+    return output.model_copy(
+        update={
+            "misinformation_risk_score": adjusted,
+            "credibility_weighted_support": round(support, 4),
+            "reasoning_chain": [*output.reasoning_chain, audit],
+        }
+    )
+
+
 class LangChainAgent:
     """Thin wrapper around the shared ReAct agent.
 
@@ -197,10 +293,10 @@ class LangChainAgent:
         # already-validated AgentOutput, so no JSON parsing is needed.
         structured = result.get("structured_response")
         if isinstance(structured, AgentOutput):
-            return structured
+            return apply_credibility_weighting(structured)
         if isinstance(structured, dict):
             try:
-                return AgentOutput(**structured)
+                return apply_credibility_weighting(AgentOutput(**structured))
             except ValidationError as exc:
                 raise AgentOutputError(
                     f"Agent structured response failed validation:\n{exc}"
@@ -213,7 +309,7 @@ class LangChainAgent:
         data.setdefault("tool_rounds", 1)
 
         try:
-            return AgentOutput(**data)
+            return apply_credibility_weighting(AgentOutput(**data))
         except ValidationError as exc:
             raise AgentOutputError(
                 f"Agent output failed schema validation:\n{exc}\n"

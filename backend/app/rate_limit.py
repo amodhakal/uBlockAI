@@ -123,8 +123,18 @@ class InMemoryRateLimiter:
         self._buckets: Dict[str, _Bucket] = {}
         self._lock = threading.Lock()
 
-    def check(self, bucket: str, limit: Optional[int] = None) -> RateLimitDecision:
+    def check(
+        self, bucket: str, limit: Optional[int] = None, units: int = 1
+    ) -> RateLimitDecision:
+        """Charge ``units`` requests to ``bucket`` and report the decision.
+
+        ``units`` exists for the batch endpoint, which performs several
+        analyses inside one HTTP request: charging it one token would make
+        batching cheaper per analysis than not batching, which is precisely
+        the cost multiplier the shared route group exists to prevent.
+        """
         effective_limit = self.limit if limit is None else limit
+        charge = max(0, units)
         now = self._clock()
 
         with self._lock:
@@ -137,7 +147,7 @@ class InMemoryRateLimiter:
                 if len(self._buckets) > self.max_keys:
                     self._evict_oldest_locked()
 
-            entry.count += 1
+            entry.count += charge
             reset_after = max(0, int(self.window_seconds - (now - entry.window_start)))
             allowed = entry.count <= effective_limit
             remaining = max(0, effective_limit - entry.count)
@@ -224,6 +234,36 @@ def require_rate_limit(group: str) -> Callable:
         return wrapper
 
     return decorator
+
+
+def consume_rate_limit(group: str, units: int = 1) -> RateLimitDecision:
+    """Charge ``units`` requests of ``group`` to the current caller.
+
+    The batch endpoint uses this instead of ``require_rate_limit`` because it
+    performs N analyses in one HTTP request. It draws on the same per-token
+    bucket as the single endpoint, so the total spend a token can make in a
+    window is unchanged by batching.
+    """
+    limiter = get_limiter(group)
+    identity = current_identity()
+    bucket = f"{identity.key_id}:{group}"
+    decision = limiter.check(bucket, units=units)
+    g.rate_limit = decision
+
+    if not decision.allowed:
+        logger.warning(
+            "rate limit exceeded group=%s key_id=%s limit=%d units=%d",
+            group,
+            identity.key_id,
+            decision.limit,
+            units,
+        )
+        raise RateLimitExceeded(
+            retry_after=decision.reset_after,
+            limit=decision.limit,
+            remaining=decision.remaining,
+        )
+    return decision
 
 
 def current_decision() -> Optional[RateLimitDecision]:

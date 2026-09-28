@@ -455,6 +455,45 @@ def _extract_ocr_text(image_urls: List[str], ocr_profile: str) -> tuple[str, Lis
     return "\n".join(chunks), errors
 
 
+def extract_text_from_images(
+    images: list,
+    caption: str = "",
+    alt_text: str = "",
+    ocr_profile: str = "fast",
+) -> dict[str, str]:
+    """Build the LLM input from already-decoded images.
+
+    This is the path taken when the extension supplied the image bytes, so no
+    network fetch happens at all and the SSRF surface the scrape path carries is
+    not reached.
+    """
+    chunks: List[str] = []
+    errors: List[str] = []
+    for image, digest in images:
+        try:
+            text = _extract_best_text_from_image(image, ocr_profile=ocr_profile)
+            if text.strip():
+                chunks.append(text.strip())
+        except Exception as exc:
+            errors.append(f"{digest[:12]} -> {type(exc).__name__}: {exc}")
+            logger.warning("OCR failed for inline image: %s", errors[-1])
+    return _compose_llm_input(caption, alt_text, "\n\n".join(chunks), errors)
+
+
+def _compose_llm_input(
+    caption: str, alt_text: str, ocr_text: str, errors: List[str] | None = None
+) -> dict[str, str]:
+    parts = [caption.strip(), alt_text.strip(), ocr_text.strip()]
+    result = {
+        "llm-input-text": "\n\n".join(part for part in parts if part),
+        "caption": caption,
+        "alt-text": alt_text,
+    }
+    if errors:
+        result["ocr-errors"] = "; ".join(errors)
+    return result
+
+
 def extract_post_text_for_llm(
     post_url: str,
     caption: str = "",
@@ -462,24 +501,27 @@ def extract_post_text_for_llm(
     max_images: int = 3,
     ocr_profile: str = "fast",
     poster_url: str = "",
+    images: list | None = None,
 ) -> dict[str, str]:
     if ocr_profile not in {"fast", "accurate"}:
         raise ValueError("ocr_profile must be either 'fast' or 'accurate'")
-    # The poster frame the caller already holds is preferred over a scrape: the
+
+    # Bytes supplied means no fetch is attempted. This is the whole point: the
+    # scrape mostly hits Instagram's login wall, and skipping it also means the
+    # SSRF protections in app.url_safety are never consulted for this request.
+    if images:
+        return extract_text_from_images(
+            images, caption=caption, alt_text=alt_text, ocr_profile=ocr_profile
+        )
+
+    # A poster frame the caller already holds is preferred over a scrape: the
     # scrape re-fetches a page the platform may answer with a login wall, and
     # for a Reel there is no <img> for it to find anyway.
     image_urls = resolve_video_poster(poster_url) or _extract_image_urls(
         post_url, max_images=max_images
     )
-    ocr_text, _ = _extract_ocr_text(image_urls, ocr_profile=ocr_profile)
-    llm_input_parts = [caption.strip(), alt_text.strip(), ocr_text.strip()]
-    llm_input_text = "\n\n".join(part for part in llm_input_parts if part)
-
-    return {
-        "llm-input-text": llm_input_text,
-        "caption": caption,
-        "alt-text": alt_text,
-    }
+    ocr_text, errors = _extract_ocr_text(image_urls, ocr_profile=ocr_profile)
+    return _compose_llm_input(caption, alt_text, ocr_text, errors)
 
 
 def get_image_data(
