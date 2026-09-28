@@ -66,8 +66,9 @@ scraping the post, `--ocr-profile {fast,accurate}` picks the OCR variant grid,
 `--no-include-caption` drops the caption from the combined payload, and
 `--profile-ocr` reports per-variant timing and yield and exits.
 
-Output is a JSON object with exactly three keys: `llm-input-text` (caption, alt
-text and OCR text combined), `caption`, and `alt-text`. The key is
-`llm-input-text` with hyphens - the earlier `llm_input_text` in this file was
-never a real key. No image URLs are returned, despite what this file used to
+Output is a JSON object with `llm-input-text` (caption, alt text and OCR text
+combined), `caption`, and `alt-text`. A fourth key, `ocr-errors`, is added when
+at least one image failed OCR, so callers must not assume a fixed key count. The
+key is `llm-input-text` with hyphens - the earlier `llm_input_text` in this file
+was never a real key. No image URLs are returned, despite what this file used to
 say.
