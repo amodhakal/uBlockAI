@@ -1,0 +1,19 @@
+{
+  "name": "ublockai-extension",
+  "version": "1.0.0",
+  "private": true,
+  "description": "uBlockAI: misinformation blocking Chrome extension",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint src background.js popup.js",
+    "lint:fix": "eslint src background.js popup.js --fix",
+    "format": "prettier --write \"**/*.{js,json,html,css}\"",
+    "format:check": "prettier --check \"**/*.{js,json,html,css}\"",
+    "test": "node --test src/lib/*.test.js"
+  },
+  "devDependencies": {
+    "eslint": "^9.18.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2"
+  }
+}
