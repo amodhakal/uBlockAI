@@ -16,7 +16,12 @@ import {
   toSlider,
 } from "./src/lib/defaults.js";
 import { applyTranslations, setDocumentLocale, t } from "./src/lib/i18n.js";
-import { applyFontScale, loadSettings, readSync, writeSync } from "./src/lib/settings.js";
+import {
+  applyFontScale,
+  loadSettings,
+  readLocal,
+  writeSync,
+} from "./src/lib/settings.js";
 
 const BRAND = "uBlockAI";
 
@@ -94,7 +99,9 @@ function fillSelect(select, entries, selected) {
 }
 
 async function refreshStats() {
-  const data = await readSync([STORAGE_KEYS.hiddenCount, STORAGE_KEYS.analyzedCount]);
+  // Counters live in storage.local (high-churn, not synced). Reading sync
+  // here showed a permanent zero.
+  const data = await readLocal([STORAGE_KEYS.hiddenCount, STORAGE_KEYS.analyzedCount]);
   els.hiddenCount.textContent = String(Number(data[STORAGE_KEYS.hiddenCount] ?? 0) || 0);
   els.analyzedCount.textContent = String(
     Number(data[STORAGE_KEYS.analyzedCount] ?? 0) || 0,
@@ -180,7 +187,7 @@ async function init() {
   await refreshStats();
 
   chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace !== "sync") return;
+    if (namespace !== "local") return;
     if (changes[STORAGE_KEYS.hiddenCount]) refreshStats();
     if (changes[STORAGE_KEYS.analyzedCount]) refreshStats();
   });

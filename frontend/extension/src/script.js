@@ -8,6 +8,7 @@
 
 import { adapterForUrl, collectPosts, queryWithFallback } from "./adapters/index.js";
 import { LruCache, compactStorageKey, stableCacheKey } from "./lib/cache.js";
+import { coerceCount, recordHide, recordUnhide, restoreCounts } from "./lib/counters.js";
 import { runBounded, withTimeout } from "./lib/concurrency.js";
 import { queueReport } from "./lib/feedback.js";
 import { buildAnalyzePayload } from "./lib/payload.js";
@@ -26,6 +27,7 @@ import {
   STORAGE_AREAS,
   loadSettings,
   onSettingsChanged,
+  readLocal,
   readSync,
   writeLocal,
   writeSync,
@@ -75,8 +77,8 @@ const trustedKeys = new Set();
 /** @type {Set<string>} post keys currently hidden */
 const hiddenKeys = new Set();
 
-/** Counters are high-churn and not worth syncing. */
-const counters = createDebouncedWriter(
+/** Counters are high-churn local state kept in storage.local, not sync. */
+const counterWriter = createDebouncedWriter(
   (value) => writeLocal(value, STORAGE_AREAS.LOCAL),
   HIDDEN_KEY_WRITE_DEBOUNCE_MS,
   HIDDEN_KEY_WRITE_MAX_WAIT_MS,
@@ -269,11 +271,12 @@ function hidePost(post, result) {
 
   markPost(element, { postKey, state: "hidden" });
 
-  if (!hiddenKeys.has(postKey)) {
-    hiddenKeys.add(postKey);
-    totalHiddenCount += 1;
-    queueHiddenKeyWrite();
-  }
+  // The lifetime total moves only here, on an explicit hide transition.
+  // It must never be assigned from a DOM query: nodes come and go as the feed
+  // re-renders, so the DOM-present count is a different quantity.
+  const transition = recordHide(hiddenKeys, totalHiddenCount, postKey);
+  totalHiddenCount = transition.lifetime;
+  if (transition.added) queueHiddenKeyWrite();
 }
 
 /**
@@ -403,8 +406,8 @@ function reapplyAll() {
     if (shouldHide && !hiddenKeys.has(postKey)) {
       hidePost({ element, imageUrl: null, caption: "" }, result);
     } else if (!shouldHide && hiddenKeys.has(postKey)) {
-      hiddenKeys.delete(postKey);
-      totalHiddenCount = Math.max(0, totalHiddenCount - 1);
+      const transition = recordUnhide(hiddenKeys, totalHiddenCount, postKey);
+      totalHiddenCount = transition.lifetime;
       const original = originalContent.get(postKey);
       if (original && element.isConnected) {
         element.innerHTML = original;
@@ -479,7 +482,7 @@ async function scan() {
   // Counters are high-churn local state, not settings. Writing them to sync on
   // every batch spent the sync write budget and was semantically wrong: two
   // profiles would race on a synced counter.
-  counters.push({
+  counterWriter.push({
     [STORAGE_KEYS.analyzedCount]: totalAnalyzedCount,
     [STORAGE_KEYS.hiddenCount]: totalHiddenCount,
   });
@@ -570,6 +573,9 @@ async function loadHiddenDigests() {
 // --------------------------------------------------------------------------
 
 const observer = new MutationObserver((mutations) => {
+  // The observer only schedules a scan. It must never read the DOM to assign
+  // the persisted lifetime hiddenCount: the DOM-present count drops whenever
+  // the feed re-renders, while the lifetime total must survive mutations.
   let sawPost = false;
   for (const mutation of mutations) {
     for (const node of mutation.addedNodes) {
@@ -617,15 +623,20 @@ async function start() {
   trustedKeys.clear();
   for (const key of settings.trustedKeys) trustedKeys.add(key);
 
-  const counters = await readSync([STORAGE_KEYS.hiddenCount, STORAGE_KEYS.analyzedCount]);
-  totalHiddenCount = Number(counters[STORAGE_KEYS.hiddenCount] ?? 0) || 0;
-  totalAnalyzedCount = Number(counters[STORAGE_KEYS.analyzedCount] ?? 0) || 0;
+  const stored = await readLocal([STORAGE_KEYS.hiddenCount, STORAGE_KEYS.analyzedCount]);
+  const restored = restoreCounts(
+    stored,
+    STORAGE_KEYS.hiddenCount,
+    STORAGE_KEYS.analyzedCount,
+  );
+  totalHiddenCount = coerceCount(restored.hidden);
+  totalAnalyzedCount = coerceCount(restored.analyzed);
 
   setDebug(settings.debugLogging === true);
   hiddenDigests = await loadHiddenDigests();
   observe();
   await scan();
-  void counters.flush();
+  void counterWriter.flush();
 }
 
 void start();
