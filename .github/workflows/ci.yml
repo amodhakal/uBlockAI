@@ -125,12 +125,18 @@ jobs:
         working-directory: frontend/extension
         run: npm run format:check
 
+      - name: Unit tests
+        if: steps.detect.outputs.present == 'true'
+        working-directory: frontend/extension
+        run: npm test
+
       - name: Syntax check
         if: steps.detect.outputs.present == 'true'
         working-directory: frontend/extension
         run: |
           node --check background.js
           node --check popup.js
+          node --check options.js
 
   smoke:
     name: Backend boots and reports healthy

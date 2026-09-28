@@ -5,8 +5,8 @@
   "description": "uBlockAI: misinformation blocking Chrome extension",
   "type": "module",
   "scripts": {
-    "lint": "eslint src background.js popup.js",
-    "lint:fix": "eslint src background.js popup.js --fix",
+    "lint": "eslint src background.js popup.js options.js",
+    "lint:fix": "eslint src background.js popup.js options.js --fix",
     "format": "prettier --write \"**/*.{js,json,html,css}\"",
     "format:check": "prettier --check \"**/*.{js,json,html,css}\"",
     "test": "node --test src/lib/*.test.js"
