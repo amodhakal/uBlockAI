@@ -188,7 +188,9 @@ def resolve_video_poster(poster_url: str) -> List[str]:
     if not raw:
         return []
     if len(raw) > MAX_POSTER_URL_LENGTH:
-        logger.warning("video poster exceeds %d characters; ignoring", MAX_POSTER_URL_LENGTH)
+        logger.warning(
+            "video poster exceeds %d characters; ignoring", MAX_POSTER_URL_LENGTH
+        )
         return []
 
     try:
@@ -198,7 +200,9 @@ def resolve_video_poster(poster_url: str) -> List[str]:
         return []
 
     if _is_media_container_url(safe):
-        logger.warning("video poster points at a media container, not a frame; ignoring")
+        logger.warning(
+            "video poster points at a media container, not a frame; ignoring"
+        )
         return []
 
     return [safe]

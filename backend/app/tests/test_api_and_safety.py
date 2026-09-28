@@ -443,7 +443,9 @@ def test_a_poster_is_ignored_for_an_image_post(
     assert captured_classifier["poster_url"] == ""
 
 
-def test_client_metadata_survives_the_video_flag(client, monkeypatch, captured_classifier):
+def test_client_metadata_survives_the_video_flag(
+    client, monkeypatch, captured_classifier
+):
     agent = _stub_agent(monkeypatch)
     client.post(
         "/api/analyze_claims",
