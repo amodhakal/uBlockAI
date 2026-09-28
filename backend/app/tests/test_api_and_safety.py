@@ -369,3 +369,44 @@ def test_agent_failure_returns_generic_error(client, monkeypatch):
     body = json.dumps(response.get_json())
     assert "sk-leaked" not in body
     assert "/srv/app" not in body
+
+
+# --------------------------------------------------------------------------
+# Health endpoint
+# --------------------------------------------------------------------------
+
+
+def test_health_ok_when_configured(client):
+    response = client.get("/api/health")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["status"] == "ok"
+    assert body["checks"]["api_key_configured"] is True
+
+
+def test_health_degraded_without_api_key(client, monkeypatch):
+    import dataclasses
+
+    import app.config as config
+
+    patched = dataclasses.replace(config.get_settings(), openai_api_key="")
+    monkeypatch.setattr("app.api.routes.get_settings", lambda: patched)
+
+    response = client.get("/api/health")
+    assert response.status_code == 503
+    assert response.get_json()["status"] == "degraded"
+
+
+def test_health_never_echoes_the_key(client):
+    """The probe reports presence as a boolean and nothing more."""
+    body = client.get("/api/health").get_json()
+    flat = json.dumps(body)
+    assert "sk-test" not in flat
+    # No field may be named api_key; only the boolean api_key_configured.
+    assert "api_key" not in body
+    assert body["checks"]["api_key_configured"] is True
+    assert set(body["checks"]) == {
+        "api_key_configured",
+        "search_provider_configured",
+        "feedback_dir_writable",
+    }

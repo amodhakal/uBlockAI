@@ -1,0 +1,48 @@
+# Optional: the standard pre-commit framework.
+#
+#   pip install pre-commit && pre-commit install
+#
+# This is an alternative to `make hooks`, which installs a plain git hook that
+# runs the same checks without requiring the pre-commit toolchain. Both are
+# supported; pick one to avoid running the gates twice per commit.
+
+default_language_version:
+  python: python3
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.18.2
+    hooks:
+      - id: mypy
+        files: ^backend/app/
+        args: [--config-file, backend/pyproject.toml]
+        additional_dependencies:
+          - types-requests
+          - types-beautifulsoup4
+          - pydantic
+          - langchain-core
+          - langchain-openai
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: backend/.venv/bin/pytest
+        language: system
+        pass_filenames: false
+        files: ^backend/app/
+
+      - id: json-valid
+        name: valid JSON
+        entry: python -m json.tool
+        language: system
+        types: [json]
